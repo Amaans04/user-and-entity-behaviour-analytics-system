@@ -1,0 +1,16 @@
+[theme]
+base = "light"
+primaryColor = "#2a78d6"
+backgroundColor = "#fcfcfb"
+secondaryBackgroundColor = "#f3f2ee"
+textColor = "#0b0b0b"
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false
+
+[server]
+maxUploadSize = 1024
+# Only this machine can open the console. To serve a team, put it behind a reverse
+# proxy with TLS rather than exposing Streamlit directly (see README, "Deployment").
+address = "localhost"

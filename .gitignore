@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/ueba.db
+data/models.joblib
+data/live/
+data/cert_converted/
+papers/
+data/workspaces/
+data/console.db
+data/service.json
+data/cert/
+.DS_Store
+.playwright-mcp/
+data/raw/
+*.tmp
