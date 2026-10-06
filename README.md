@@ -51,7 +51,8 @@ Other commands:
 | `python -m ueba.agent --url http://127.0.0.1:8600 --workspace lab --token …` | stream a machine's telemetry to the API |
 | `python -m ueba.replay --workspace NAME [--url … --token …]` | replay a dataset as a live feed |
 | `python experiments.py` | robustness (5 seeds) + ablation study → `reports/experiments.md` |
-| `python -m pytest -q` | 22 unit + integration tests |
+| `python -m pytest -q` | 24 unit + integration tests |
+| `python experiments_cert.py` | CERT r4.2 benchmark, both variants + held-out split → `reports/cert_r4.2.md` |
 
 ---
 
@@ -64,7 +65,7 @@ Other commands:
 | **Capture** network logs | same | outbound connections: domain, port, bytes in/out |
 | **Capture** resource-usage logs | same + `ueba/collector.py` | hourly CPU / memory / disk / process samples; **live capture from the real host** via psutil |
 | **Behavioural profiles** for users *and* devices | `ueba/features.py`, `ueba/profiles.py` | 44 user features and 19 device features per day; personal baseline, department peer baseline, usual hours, hosts, countries, domains |
-| **Identify deviations** | `ueba/detectors.py` | robust z-scores (personal + peer), ML ensemble (Isolation Forest, LOF, Autoencoder), 20 MITRE-mapped threat rules |
+| **Identify deviations** | `ueba/detectors.py` | robust z-scores (personal + peer), ML ensemble (Isolation Forest, LOF, Autoencoder), 21 MITRE-mapped threat rules |
 | **Risk-based alerts** | `ueba/risk.py` | fused 0-100 daily risk, decaying accumulated entity risk, severity, plain-English reasons, MITRE ATT&CK tags |
 | Presentation | `dashboard/` | Streamlit SOC console: overview, alert triage, entity investigation, model performance, data sources, live monitor, log explorer, administration; refreshes live |
 | Bring your own logs | `ueba/sources.py`, `ueba/workspace.py` | upload CSV/JSON/ZIP exports, automatic log-type detection and column mapping, per-dataset workspaces with a learning → monitoring lifecycle |
@@ -290,11 +291,40 @@ older than the newest data) stay quiet; every attempt, including failures, is lo
 | Personal baseline only | 0.457 | 0.451 |
 | Threat rules only | 0.965 | 0.982 |
 
-**Honest interpretation:** rules score very high because they were written for these known attack
+**Honest interpretation (synthetic):** rules score very high because they were written for these known attack
 types. The value of the behavioural/ML layers is that they need **no prior knowledge of the attack** -
 with rules switched off, the system still reaches F1 0.86. Combining them gives the best ranking
 (PR-AUC 0.996). The one remaining false positive is a planted benign oddity (an HR user joining a new
 project and opening 11 unfamiliar files) - genuinely unusual behaviour that an analyst would close in seconds. Synthetic data is cleaner than real logs, so the CERT run is the more realistic benchmark.
+
+### 4.1 CERT r4.2 benchmark (independent data)
+
+The synthetic organisation was designed together with the detector, so the system was also run on the
+public **CMU CERT r4.2** insider-threat data set (1,000 users, 17 months, 70 insiders, 12.8 M events after
+conversion; ~8 min, 6.4 GB peak memory). Protocol (`experiments_cert.py`): unsupervised, learning period
+Jan-May 2010 (before any attack); users split at random into a development half and a **held-out test
+half**; the out-of-the-box result is frozen first.
+
+| Held-out test half (36 labelled accounts) | Out-of-the-box | + R16 (generic USB indicator) |
+|---|---|---|
+| Insiders alerted on a malicious day | **3 / 36** | **22 / 36** |
+| · scenario 1 - new USB user leaks data | 1 / 18 | 18 / 18 |
+| · scenario 2 - job seeker steals data | 1 / 14 | 1 / 14 |
+| · scenario 3 - admin plants keylogger | 1 / 4 | 3 / 4 |
+| Alerts per day (~500 users) | 0.66 | 0.84 |
+| Day-level precision / recall | 0.017 / 0.008 | 0.146 / 0.091 |
+| Fused ROC-AUC | 0.699 | 0.733 |
+| Insiders among the 3 riskiest users per day | 12 / 36 | 28 / 36 |
+
+**What it shows.** Out of the box the system generalises poorly: its behavioural layers were calibrated on
+loud synthetic attacks and ignore deviations below 3 robust σ / the 99th ML percentile, which is exactly
+where quiet CERT insiders sit (statistical and ML layers rank CERT days at ROC-AUC ≈ 0.54). One generic
+insider indicator - removable-media use by an account with no removable-media history (R16, T1052.001),
+chosen on the development half (4 → 17 / 36) and never firing on the synthetic data - lifts the held-out
+result to 22 / 36 at under one alert a day. Gradual theft by job seekers (scenario 2), who already used
+USB drives, remains largely undetected; catching it needs behavioural scores that add up many small
+deviations (future work). The answer key labels 72 accounts: 70 insiders + 2 supervisors whose accounts
+scenario-3 insiders misused. Full tables: `reports/cert_r4.2.md`; figure `reports/figures/cert_r4.2.png`.
 
 Figures for the report are generated in `reports/figures/`: ROC curves, PR curves, risk distribution,
 confusion matrix, per-detector AUC, peak risk per incident.
@@ -341,12 +371,14 @@ InHouse Project/
 
 ## 6. Testing
 
-`python -m pytest -q` - 22 tests, ~45 s:
+`python -m pytest -q` - 24 tests, ~75 s:
 
 * **Detection** - haversine / impossible travel, hour rarity, deviation scoring, rules, risk fusion
   bounds, full pipeline catches the planted attacks with FPR < 2 %, no attacks in the baseline window,
   CERT adapter, feedback round-trip.
 * **Ingestion** - foreign column names and values (`TimeCreated`, `CORP\Alice`, `4625`), partial streams.
+* **CERT** - adapter on a format-identical sample; answers of other releases never label users; R16 and
+  the rule-disable switch.
 * **Platform** - incremental update **equals** a full re-run (day boundary and mid-day); re-training
   is forced when models can't be reused; inbox import and rejection reasons; ingest API auth / scope /
   validation / queueing; password hashing, roles, lock-out, token scoping and revocation, audit;
@@ -370,9 +402,12 @@ Python · pandas · NumPy · scikit-learn · SQLite · Streamlit · Plotly · Ma
 
 ## 9. Limitations & future work
 
-* **Validation on real data.** Results above are on synthetic logs, which are cleaner than production
-  logs. The CERT r4.2 adapter is ready (`--cert`) but the dataset (~15 GB) has to be downloaded; real
-  Windows Event / Sysmon / Zeek exports can be uploaded or shipped to the API today.
+* **Quiet insiders.** On CERT r4.2 the behavioural layers barely separate malicious from normal days
+  (ROC-AUC ≈ 0.54) because they ignore small deviations; continuous, per-organisation calibrated scores
+  are needed to catch gradual insiders (CERT scenario 2). Precision on the synthetic data (0.964) is an
+  upper bound.
+* **More validation.** CERT r5.2 / r6.2 and real Windows Event / Sysmon / Zeek logs (which can be
+  uploaded or shipped to the API today).
 * The agent can't measure bytes per connection without packet capture, so upload volumes should come
   from proxy / firewall logs.
 * Daily granularity: an attack is detected within one service pass of its data arriving, but features

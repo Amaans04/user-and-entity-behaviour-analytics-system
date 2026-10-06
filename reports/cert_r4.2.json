@@ -1,0 +1,342 @@
+{
+ "out-of-the-box": {
+  "test": {
+   "user_days": 113374,
+   "malicious_days": 475,
+   "insiders": 36,
+   "insiders_caught": 3,
+   "by_scenario": {
+    "r4.2-1": [
+     1,
+     18
+    ],
+    "r4.2-2": [
+     1,
+     14
+    ],
+    "r4.2-3": [
+     1,
+     4
+    ]
+   },
+   "alerts": 232,
+   "alerts_per_day": 0.66,
+   "tp": 4,
+   "fp": 228,
+   "precision": 0.017,
+   "recall": 0.008,
+   "fpr": 0.00202,
+   "roc_auc": 0.699,
+   "pr_auc": 0.0096,
+   "layers": {
+    "stat": 0.544,
+    "peer": 0.506,
+    "ml": 0.549,
+    "ml_iforest": 0.519,
+    "ml_lof": 0.499,
+    "ml_autoencoder": 0.544,
+    "rule": 0.665,
+    "daily_risk": 0.699
+   },
+   "budget": {
+    "1": {
+     "reviews": 351,
+     "malicious_days": 3,
+     "insiders": 1
+    },
+    "3": {
+     "reviews": 1051,
+     "malicious_days": 15,
+     "insiders": 12
+    },
+    "5": {
+     "reviews": 1751,
+     "malicious_days": 26,
+     "insiders": 19
+    }
+   }
+  },
+  "dev": {
+   "user_days": 111804,
+   "malicious_days": 511,
+   "insiders": 36,
+   "insiders_caught": 4,
+   "by_scenario": {
+    "r4.2-1": [
+     2,
+     12
+    ],
+    "r4.2-2": [
+     0,
+     16
+    ],
+    "r4.2-3": [
+     2,
+     8
+    ]
+   },
+   "alerts": 84,
+   "alerts_per_day": 0.24,
+   "tp": 4,
+   "fp": 80,
+   "precision": 0.048,
+   "recall": 0.008,
+   "fpr": 0.00072,
+   "roc_auc": 0.703,
+   "pr_auc": 0.0111,
+   "layers": {
+    "stat": 0.537,
+    "peer": 0.492,
+    "ml": 0.545,
+    "ml_iforest": 0.522,
+    "ml_lof": 0.508,
+    "ml_autoencoder": 0.541,
+    "rule": 0.68,
+    "daily_risk": 0.703
+   },
+   "budget": {
+    "1": {
+     "reviews": 351,
+     "malicious_days": 11,
+     "insiders": 10
+    },
+    "3": {
+     "reviews": 1053,
+     "malicious_days": 20,
+     "insiders": 17
+    },
+    "5": {
+     "reviews": 1753,
+     "malicious_days": 26,
+     "insiders": 20
+    }
+   }
+  },
+  "all": {
+   "user_days": 225178,
+   "malicious_days": 986,
+   "insiders": 72,
+   "insiders_caught": 7,
+   "by_scenario": {
+    "r4.2-1": [
+     3,
+     30
+    ],
+    "r4.2-2": [
+     1,
+     30
+    ],
+    "r4.2-3": [
+     3,
+     12
+    ]
+   },
+   "alerts": 316,
+   "alerts_per_day": 0.9,
+   "tp": 8,
+   "fp": 308,
+   "precision": 0.025,
+   "recall": 0.008,
+   "fpr": 0.00137,
+   "roc_auc": 0.701,
+   "pr_auc": 0.01,
+   "layers": {
+    "stat": 0.54,
+    "peer": 0.499,
+    "ml": 0.547,
+    "ml_iforest": 0.521,
+    "ml_lof": 0.504,
+    "ml_autoencoder": 0.543,
+    "rule": 0.673,
+    "daily_risk": 0.701
+   },
+   "budget": {
+    "1": {
+     "reviews": 351,
+     "malicious_days": 7,
+     "insiders": 5
+    },
+    "3": {
+     "reviews": 1053,
+     "malicious_days": 25,
+     "insiders": 21
+    },
+    "5": {
+     "reviews": 1754,
+     "malicious_days": 34,
+     "insiders": 28
+    }
+   }
+  }
+ },
+ "with R16": {
+  "test": {
+   "user_days": 113374,
+   "malicious_days": 475,
+   "insiders": 36,
+   "insiders_caught": 22,
+   "by_scenario": {
+    "r4.2-1": [
+     18,
+     18
+    ],
+    "r4.2-2": [
+     1,
+     14
+    ],
+    "r4.2-3": [
+     3,
+     4
+    ]
+   },
+   "alerts": 294,
+   "alerts_per_day": 0.84,
+   "tp": 43,
+   "fp": 251,
+   "precision": 0.146,
+   "recall": 0.091,
+   "fpr": 0.00222,
+   "roc_auc": 0.733,
+   "pr_auc": 0.0212,
+   "layers": {
+    "stat": 0.544,
+    "peer": 0.506,
+    "ml": 0.551,
+    "ml_iforest": 0.519,
+    "ml_lof": 0.5,
+    "ml_autoencoder": 0.546,
+    "rule": 0.708,
+    "daily_risk": 0.733
+   },
+   "budget": {
+    "1": {
+     "reviews": 351,
+     "malicious_days": 16,
+     "insiders": 12
+    },
+    "3": {
+     "reviews": 1051,
+     "malicious_days": 48,
+     "insiders": 28
+    },
+    "5": {
+     "reviews": 1751,
+     "malicious_days": 60,
+     "insiders": 33
+    }
+   }
+  },
+  "dev": {
+   "user_days": 111804,
+   "malicious_days": 511,
+   "insiders": 36,
+   "insiders_caught": 17,
+   "by_scenario": {
+    "r4.2-1": [
+     12,
+     12
+    ],
+    "r4.2-2": [
+     0,
+     16
+    ],
+    "r4.2-3": [
+     5,
+     8
+    ]
+   },
+   "alerts": 130,
+   "alerts_per_day": 0.37,
+   "tp": 36,
+   "fp": 94,
+   "precision": 0.277,
+   "recall": 0.07,
+   "fpr": 0.00084,
+   "roc_auc": 0.731,
+   "pr_auc": 0.0296,
+   "layers": {
+    "stat": 0.537,
+    "peer": 0.492,
+    "ml": 0.543,
+    "ml_iforest": 0.522,
+    "ml_lof": 0.507,
+    "ml_autoencoder": 0.54,
+    "rule": 0.714,
+    "daily_risk": 0.731
+   },
+   "budget": {
+    "1": {
+     "reviews": 351,
+     "malicious_days": 33,
+     "insiders": 21
+    },
+    "3": {
+     "reviews": 1053,
+     "malicious_days": 46,
+     "insiders": 25
+    },
+    "5": {
+     "reviews": 1753,
+     "malicious_days": 51,
+     "insiders": 28
+    }
+   }
+  },
+  "all": {
+   "user_days": 225178,
+   "malicious_days": 986,
+   "insiders": 72,
+   "insiders_caught": 39,
+   "by_scenario": {
+    "r4.2-1": [
+     30,
+     30
+    ],
+    "r4.2-2": [
+     1,
+     30
+    ],
+    "r4.2-3": [
+     8,
+     12
+    ]
+   },
+   "alerts": 424,
+   "alerts_per_day": 1.21,
+   "tp": 79,
+   "fp": 345,
+   "precision": 0.186,
+   "recall": 0.08,
+   "fpr": 0.00154,
+   "roc_auc": 0.732,
+   "pr_auc": 0.0232,
+   "layers": {
+    "stat": 0.54,
+    "peer": 0.499,
+    "ml": 0.547,
+    "ml_iforest": 0.521,
+    "ml_lof": 0.504,
+    "ml_autoencoder": 0.543,
+    "rule": 0.711,
+    "daily_risk": 0.732
+   },
+   "budget": {
+    "1": {
+     "reviews": 351,
+     "malicious_days": 31,
+     "insiders": 23
+    },
+    "3": {
+     "reviews": 1053,
+     "malicious_days": 82,
+     "insiders": 48
+    },
+    "5": {
+     "reviews": 1754,
+     "malicious_days": 94,
+     "insiders": 54
+    }
+   }
+  }
+ }
+}

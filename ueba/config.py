@@ -47,6 +47,9 @@ class Config:
         "Engineering": 1.0, "Sales": 1.0, "server": 1.3, "laptop": 1.0,
     })
 
+    # ---- rules ---------------------------------------------------------------
+    disabled_rules: tuple = ()     # rule ids to switch off (ablations / "out-of-the-box" comparisons)
+
     # ---- impossible travel -----------------------------------------------
     max_travel_kmh: float = 900.0  # faster than a commercial jet = impossible
 

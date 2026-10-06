@@ -205,3 +205,16 @@ def test_cert_labels_only_this_release(tmp_path):
     convert_cert(root, tmp_path / "conv", max_users=12)
     gt = pd.read_csv(tmp_path / "conv" / "ground_truth.csv")
     assert set(gt["entity"]) == {insider.lower()} and set(gt["date"]) == {"2010-03-01"}
+
+
+def test_rule_r16_first_time_removable_media_and_disable_switch():
+    base = {c: 0 for c in ["max_fail_10min", "fail_then_success", "impossible_travel", "new_countries", "priv_esc",
+                           "account_changes", "log_tamper", "new_domain_upload_mb", "cloud_upload_mb", "mining_conns",
+                           "new_dest_hosts", "off_hours_access", "sensitive_access", "unregistered_device_logins",
+                           "job_site_visits", "new_sensitive_resources", "restricted_access", "baseline_restricted"]}
+    df = pd.DataFrame([dict(base, is_admin=False, department="Sales", removable_media=3, baseline_removable=0),
+                       dict(base, is_admin=False, department="Sales", removable_media=3, baseline_removable=12)])
+    score, hits = apply_rules(df, "user")
+    assert [h["rule_id"] for h in hits[0]] == ["R16"] and hits[1] == [] and score[0] == pytest.approx(0.45)
+    score, hits = apply_rules(df, "user", disabled=("R16",))
+    assert score[0] == 0 and hits[0] == []

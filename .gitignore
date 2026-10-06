@@ -15,3 +15,4 @@ data/cert/
 .playwright-mcp/
 data/raw/
 *.tmp
+data/cert_eval/

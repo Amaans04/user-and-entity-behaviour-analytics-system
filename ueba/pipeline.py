@@ -84,7 +84,10 @@ def score_entities(feats: pd.DataFrame, cols: list, etype: str, train_start: str
     peer = det.deviation_score(zpeer, cfg.z_alert)
     F["baseline_restricted"] = [float(base.baseline_of(e)["median"].get("restricted_access", 0))
                                 if "restricted_access" in cols else 0.0 for e in F["entity"]]
-    rule, hits = det.apply_rules(F, etype)
+    # removable-media use during the learning period (insider indicator R16: first-time USB users)
+    F["baseline_removable"] = (F["entity"].map(F.loc[train_mask].groupby("entity")["removable_media"].sum())
+                               .fillna(0).to_numpy() if "removable_media" in cols else 1.0)
+    rule, hits = det.apply_rules(F, etype, cfg.disabled_rules)
 
     def zfor(idx):
         return np.clip((X[idx] - med[idx]) / scale[idx], -cfg.z_clip, cfg.z_clip)

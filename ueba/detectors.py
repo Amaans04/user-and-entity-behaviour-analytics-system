@@ -192,6 +192,11 @@ RULES = [
     Rule("R15", "First-time restricted access", 0.30, "T1213 Data from Information Repositories", "user",
          lambda d: (d["new_sensitive_resources"] >= 3) & (d["baseline_restricted"] == 0) & (d["restricted_access"] > 0),
          lambda r: f"{r.new_sensitive_resources:.0f} sensitive resources opened for the first time"),
+    Rule("R16", "Removable media without history", 0.45, "T1052.001 Exfiltration over USB", "user",
+         lambda d: ((d.get("removable_media", pd.Series(0, index=d.index)) > 0)
+                    & (d.get("baseline_removable", pd.Series(1, index=d.index)) == 0)),
+         lambda r: f"{r.removable_media:.0f} removable-media events by an account that never used removable media "
+                   "during its learning period"),
     # ---- device rules ----
     Rule("D01", "Crypto-mining host", 0.80, "T1496 Resource Hijacking", "device",
          lambda d: d["mining_conns"] > 0,
@@ -211,12 +216,12 @@ RULES = [
 ]
 
 
-def apply_rules(df: pd.DataFrame, entity_type: str) -> tuple[np.ndarray, list[list[dict]]]:
+def apply_rules(df: pd.DataFrame, entity_type: str, disabled: tuple = ()) -> tuple[np.ndarray, list[list[dict]]]:
     """Return the combined rule score per row and the list of rule hits per row."""
     hits: list[list[dict]] = [[] for _ in range(len(df))]
     survive = np.ones(len(df))
     for rule in RULES:
-        if rule.applies_to != entity_type:
+        if rule.applies_to != entity_type or rule.rule_id in disabled:
             continue
         mask = rule.when(df).fillna(False).to_numpy(dtype=bool)
         for i in np.flatnonzero(mask):
