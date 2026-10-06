@@ -188,3 +188,20 @@ def test_workspace_upload_learning_then_monitoring(small_run, tmp_path, monkeypa
     assert workspace.get(ws.slug).meta["mappings"]["sig"]["stream"] == "auth"
     workspace.delete(ws.slug)
     assert [w.slug for w in workspace.list_all()] == ["demo"]
+
+
+def test_cert_labels_only_this_release(tmp_path):
+    """Answer files of other CERT releases (which re-use user ids) must not label anyone."""
+    from cert_sample import write_cert_sample
+    from ueba.cert_loader import convert_cert
+    root = write_cert_sample(tmp_path)
+    users = pd.read_csv(root / "logon.csv")["user"].unique()
+    insider = pd.read_csv(root / "answers" / "insiders.csv")["user"][0]
+    bystander = next(u for u in users if u != insider)
+    for rel, who in (("r4.1-1", bystander), ("r4.2-1", insider)):
+        (root / "answers" / rel).mkdir()
+        (root / "answers" / rel / f"{rel}-{who}.csv").write_text(
+            f"logon,{{X1}},03/01/2010 02:00:00,{who},PC-1,Logon\n")
+    convert_cert(root, tmp_path / "conv", max_users=12)
+    gt = pd.read_csv(tmp_path / "conv" / "ground_truth.csv")
+    assert set(gt["entity"]) == {insider.lower()} and set(gt["date"]) == {"2010-03-01"}
