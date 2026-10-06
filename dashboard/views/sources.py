@@ -319,6 +319,15 @@ def page_sources():
                 audit("settings.learning_days", str(days))
                 flash("info", f"Learning period set to {days} days - re-analyse to apply.")
                 st.rerun()
+            th = st.slider("Alert threshold (daily risk 0-100)", 10, 95, int(ws.alert_threshold), 5,
+                           help="Lower = more alerts and fewer misses; higher = fewer, surer alerts. Every "
+                                "organisation needs its own value - try values on the Model performance page "
+                                "first if you have labelled incidents. Changing it needs no re-training.")
+            if th != int(ws.alert_threshold) and st.button("Save alert threshold"):
+                ws.set_alert_threshold(th)
+                audit("settings.alert_threshold", str(th))
+                flash("info", f"Alert threshold set to {th} - alerts are regenerated at the next analysis.")
+                st.rerun()
         if ws.meta.get("uploads"):
             with st.expander(f"🕘 Upload history ({len(ws.meta['uploads'])})"):
                 st.dataframe(pd.DataFrame(ws.meta["uploads"][::-1]), hide_index=True)

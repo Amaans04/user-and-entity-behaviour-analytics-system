@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 from . import detectors as det
-from . import feedback
+from . import cases, feedback
 from .config import CONFIG, DATA_DIR, DB_PATH, REPORTS_DIR, Config
 from .features import DEVICE_FEATURES, USER_FEATURES, build_features
 from .ingest import load_logs, load_table, save_tables, unified_events
@@ -175,8 +175,12 @@ def score_entities(feats: pd.DataFrame, cols: list, etype: str, train_start: str
 
 
 def _fingerprint(cfg: Config) -> str:
-    """Everything that changes how models are trained or days are scored."""
-    return json.dumps(asdict(cfg), sort_keys=True, default=str)
+    """Everything that changes how models are trained or days are scored. The alert threshold
+    is left out: it only decides which scores become alerts, and alerts are regenerated on
+    every run, so changing it needs no re-training."""
+    d = asdict(cfg)
+    d.pop("alert_threshold", None)
+    return json.dumps(d, sort_keys=True, default=str)
 
 
 def load_models(db_path: Path) -> dict | None:
@@ -285,6 +289,7 @@ def run(raw_dir: Path = DATA_DIR / "raw", db_path: Path = DB_PATH, cfg: Config =
     status = {(e, d): v for e, d, v in zip(fb["entity"], fb["date"], fb["verdict"])}
     alerts["status"] = [{"benign": "closed - benign", "threat": "confirmed threat"}.get(
         status.get((e, d)), "open") for e, d in zip(alerts["entity"], alerts["date"])]
+    alerts = cases.apply_suppressions(alerts, db_path)
     log(f"  {len(alerts)} alerts ({(alerts['severity'] == 'critical').sum()} critical, "
         f"{(alerts['severity'] == 'high').sum()} high)")
 

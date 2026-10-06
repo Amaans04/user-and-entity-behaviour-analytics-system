@@ -73,8 +73,8 @@ def style(fig: go.Figure, height: int = 320, legend: bool = True) -> go.Figure:
     return fig
 
 
-def show(fig):
-    st.plotly_chart(fig, width="stretch", config={"displaylogo": False})
+def show(fig, key: str | None = None):
+    st.plotly_chart(fig, width="stretch", config={"displaylogo": False}, key=key)
 
 
 def sev_badge(sev: str) -> str:

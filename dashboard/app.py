@@ -134,6 +134,19 @@ c1.markdown(f"👤 **{ctx.user['username']}**  \n<span class='muted'>{ctx.user['
             unsafe_allow_html=True)
 if c2.button("Sign out"):
     login.logout()
+with st.sidebar.popover("🔑 Change password"):
+    with st.form("own_pw", clear_on_submit=True):
+        old = st.text_input("Current password", type="password")
+        new1 = st.text_input("New password", type="password")
+        new2 = st.text_input("Repeat new password", type="password")
+        if st.form_submit_button("Change"):
+            try:
+                if new1 != new2:
+                    raise ValueError("The new passwords don't match")
+                auth.change_password(ctx.user["username"], old, new1)
+                st.success("Password changed.")
+            except ValueError as e:
+                st.error(str(e))
 
 ui.show_flash()
 {"Overview": overview.page_overview, "Alerts": alerts.page_alerts, "Investigate entity": entity.page_entity,

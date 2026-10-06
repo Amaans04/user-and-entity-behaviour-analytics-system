@@ -68,7 +68,7 @@ def page_entity():
             fig.add_scatter(x=lab["date"], y=[103] * len(lab), mode="markers", name="Planted attack (truth)",
                             marker=dict(symbol="triangle-down", size=10, color=INK),
                             hovertemplate="%{x}: planted attack<extra></extra>")
-    fig.add_hline(y=CONFIG.alert_threshold, line=dict(color=MUTED, dash="dash", width=1))
+    fig.add_hline(y=float(meta.get("alert_threshold", CONFIG.alert_threshold)), line=dict(color=MUTED, dash="dash", width=1))
     fig.update_layout(title="Risk over time", yaxis_range=[0, 108])
     show(style(fig, 340))
 

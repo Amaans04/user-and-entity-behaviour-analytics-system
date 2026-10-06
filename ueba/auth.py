@@ -154,6 +154,14 @@ def set_password(username: str, password: str, by: str, db: Path | None = None):
     audit(by, "user.password", detail=username, db=db)
 
 
+def change_password(username: str, old: str, new: str, db: Path | None = None):
+    """A user changing their own password: the current one must be right."""
+    authenticate(username, old, db=db)          # raises (and audits) on a wrong password
+    if old == new:
+        raise ValueError("The new password must differ from the current one")
+    set_password(username, new, by=username, db=db)
+
+
 def delete_user(username: str, by: str, db: Path | None = None):
     with _con(db) as con:
         admins = [r[0] for r in con.execute("SELECT username FROM users WHERE role='admin'")]

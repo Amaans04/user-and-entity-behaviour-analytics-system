@@ -29,8 +29,15 @@ def page_performance():
     rep = json.loads(Q("SELECT value FROM metrics")["value"][0]) if table_exists("metrics") else {}
     T = test_scores.copy()
     y = T["label"].astype(int)
-    st.caption("Measured only on the detection window, against the attacks planted by the log generator.")
-    th = st.slider("Alert threshold (what-if)", 10, 90, int(CONFIG.alert_threshold), 5)
+    st.caption("Measured only on the detection window, against the labelled incidents (the attacks planted by "
+               "the log generator, or an uploaded labels file). Labels are never used for training.")
+    current = int(float(ctx.meta.get("alert_threshold", CONFIG.alert_threshold)))
+    th = st.slider("Alert threshold (what-if)", 10, 95, current, 5,
+                   help="Move it to see the trade-off between missed attacks and false alarms.")
+    if th != current and not ctx.ws.is_demo and can("manage") and st.button(f"Apply threshold {th} to this workspace"):
+        ctx.ws.set_alert_threshold(th)
+        audit("settings.alert_threshold", f"{th} (from Model performance)")
+        analyse()
     pred = (T["daily_risk"] >= th).astype(int)
     tp = int(((pred == 1) & (y == 1)).sum()); fp = int(((pred == 1) & (y == 0)).sum())
     fn = int(((pred == 0) & (y == 1)).sum()); tn = int(((pred == 0) & (y == 0)).sum())

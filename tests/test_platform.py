@@ -212,3 +212,68 @@ def test_service_tick_learns_then_detects_and_notifies(small_raw, isolated, webh
     assert r["alerts"] > 0 and r["notified"] > 0 and len(got) == r["notified"]
     service.write_heartbeat(dict(pid=1, interval=10, last_tick=pd.Timestamp.now().isoformat(), last={}))
     assert service.read_heartbeat()["alive"]
+
+
+# ---------------------------------------------------------------- cases, suppressions, threshold
+def _alerts(rows):
+    base = dict(entity_type="user", department="Sales", alert_type="anomalous_day", risk_score=70.0,
+                daily_risk=70.0, entity_risk=50.0, reasons="[]", mitre="[]", detectors="[]", stat=0, peer=0,
+                ml=0, rule=0.5, status="open")
+    return pd.DataFrame([dict(base, alert_id=f"AL-{i}", **r) for i, r in enumerate(rows)])
+
+
+def test_cases_group_alerts_and_closing_records_verdicts(tmp_path):
+    from ueba import cases, feedback
+    db = tmp_path / "w.db"
+    a = _alerts([dict(entity="eve", date="2026-08-01", title="X", severity="high"),
+                 dict(entity="eve", date="2026-08-05", title="Y", severity="critical"),
+                 dict(entity="eve", date="2026-08-20", title="X", severity="medium"),     # > 7 days later
+                 dict(entity="bob", date="2026-08-02", title="X", severity="medium")])
+    c = cases.build_cases(a, db).set_index("case_id")
+    assert set(c.index) == {"eve@2026-08-01", "eve@2026-08-20", "bob@2026-08-02"}
+    assert c.loc["eve@2026-08-01", "alerts"] == 2 and c.loc["eve@2026-08-01", "severity"] == "critical"
+    cases.set_state(db, "eve@2026-08-01", status="investigating", assignee="ana", by="ana")
+    assert cases.build_cases(a, db).set_index("case_id").loc["eve@2026-08-01", "assignee"] == "ana"
+    days = cases.close(db, "eve@2026-08-01", a, "benign", "ana", "approved project")
+    assert days == ["2026-08-01", "2026-08-05"]
+    fb = feedback.load(db)
+    assert set(zip(fb.entity, fb.date, fb.verdict)) == {("eve", "2026-08-01", "benign"), ("eve", "2026-08-05", "benign")}
+    assert "Closed as benign" in cases.notes(db, "eve@2026-08-01")["note"].iloc[-1]
+    cases.reopen(db, "eve@2026-08-01", a, "ana")
+    assert feedback.load(db).empty
+
+
+def test_suppression_hides_but_keeps_alerts(tmp_path):
+    from ueba import cases
+    db = tmp_path / "w.db"
+    a = _alerts([dict(entity="eve", date="2026-08-01", title="Night work", severity="high"),
+                 dict(entity="eve", date="2026-09-15", title="Night work", severity="high"),
+                 dict(entity="bob", date="2026-08-01", title="Night work", severity="high")])
+    with pytest.raises(ValueError):
+        cases.suppress(db, "eve", "Night work", "2026-08-31", "", "ana")       # a reason is required
+    cases.suppress(db, "eve", "Night work", "2026-08-31", "night-shift admin", "ana")
+    s = cases.apply_suppressions(a, db)
+    assert list(s["status"]) == ["suppressed", "open", "open"]                  # other entity, after expiry: alert
+    cases.lift(db, int(cases.list_suppressions(db)["sup_id"].iloc[0]))
+    assert list(cases.apply_suppressions(a, db)["status"]) == ["open"] * 3
+
+
+def test_threshold_change_needs_no_retraining(small_raw, isolated):
+    from ueba import workspace
+    ws = workspace.create("Thr", learning_days=30)
+    ws.import_folder(small_raw)
+    first = ws.analyse()
+    ws.set_alert_threshold(80)
+    res = ws.update()
+    assert res["mode"] == "update" and len(res["alerts"]) < len(first["alerts"])
+    assert (res["alerts"]["alert_type"] == "anomalous_day").sum() == \
+        (res["scores"].loc[~res["scores"]["is_train"].astype(bool), "daily_risk"] >= 80).sum()
+
+
+def test_change_own_password(isolated):
+    from ueba import auth
+    auth.create_user("ana", "first-password", "analyst")
+    with pytest.raises(ValueError):
+        auth.change_password("ana", "wrong-password", "second-password")
+    auth.change_password("ana", "first-password", "second-password")
+    assert auth.authenticate("ana", "second-password")["role"] == "analyst"

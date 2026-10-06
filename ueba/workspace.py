@@ -128,6 +128,10 @@ class Workspace:
         return REPORTS_DIR if self.is_demo else self.root / "reports"
 
     @property
+    def alert_threshold(self) -> float:
+        return float(self.meta.get("alert_threshold", CONFIG.alert_threshold))
+
+    @property
     def learning_days(self) -> int:
         return int(self.meta.get("learning_days", CONFIG.train_days))
 
@@ -304,6 +308,15 @@ class Workspace:
             meta["learning_days"] = int(days)
             meta["dirty"] = meta["needs_full"] = True
 
+    def set_alert_threshold(self, value: float):
+        """Daily risk needed to raise an alert. Only alerting changes, so the next update re-generates
+        alerts with the saved models - no re-training."""
+        if not 10 <= float(value) <= 95:
+            raise ValueError("The alert threshold must be between 10 and 95")
+        with self.mutate() as meta:
+            meta["alert_threshold"] = float(value)
+            meta["dirty"] = True
+
     def update_settings(self, **kw):
         with self.mutate() as meta:
             meta.setdefault("settings", {}).update(kw)
@@ -366,6 +379,7 @@ class Workspace:
     def config(self):
         cfg = copy.deepcopy(CONFIG)
         if not self.is_demo:
+            cfg.alert_threshold = self.alert_threshold
             cfg.train_days = self.learning_days
             cfg.warmup_days = min(CONFIG.warmup_days, max(1, self.learning_days // 6))
         return cfg
