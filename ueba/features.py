@@ -190,11 +190,42 @@ def user_features(frames: dict, cfg: Config = CONFIG) -> pd.DataFrame:
                                       disk_io_mb=("disk_io_mb", "sum"), active_hours=("cpu_pct", "size"))))
 
     out = _merge(parts, "user", USER_FEATURES)
+    # rule-only signal (kept out of USER_FEATURES so the ML models and baselines are unchanged):
+    # successful logins from a source that failed against several different accounts within the
+    # hour - a password spray that worked (one attacker spread thin over many accounts is
+    # invisible to per-account profiles)
+    out = out.merge(spray_success(a), on=["user", "date"], how="left")
+    out["spray_success"] = out["spray_success"].fillna(0.0)
     out = out.merge(users[["user", "department", "is_admin"]], on="user", how="left")
     out["department"] = out["department"].fillna("unknown")
     out["is_admin"] = out["user"].isin(admins)
     out.insert(0, "entity_type", "user")
     return out.rename(columns={"user": "entity"})
+
+
+SPRAY_MIN_ACCOUNTS = 5
+
+
+def spray_success(a: pd.DataFrame) -> pd.DataFrame:
+    """Per user-day: successful logins from a source IP that failed against at least
+    ``SPRAY_MIN_ACCOUNTS`` different accounts in the same or the previous hour."""
+    cols = ["user", "date", "spray_success"]
+    if a.empty or "src_ip" not in a:
+        return pd.DataFrame(columns=cols)
+    x = a[a["src_ip"].astype(str).str.len() > 0].assign(hour=lambda d: d["timestamp"].dt.floor("h"))
+    fails = x[x["fail"] == 1]
+    if fails.empty:
+        return pd.DataFrame(columns=cols)
+    per = fails.groupby(["src_ip", "hour"])["user"].nunique()
+    sources = set(per[per >= SPRAY_MIN_ACCOUNTS].index)
+    if not sources:
+        return pd.DataFrame(columns=cols)
+    ok = x[x["ok"] == 1]
+    hit = [(ip, h) in sources or (ip, h - pd.Timedelta(hours=1)) in sources for ip, h in zip(ok["src_ip"], ok["hour"])]
+    ok = ok[hit]
+    if ok.empty:
+        return pd.DataFrame(columns=cols)
+    return ok.groupby(["user", "date"]).size().rename("spray_success").reset_index()
 
 
 def _network_parts(net: pd.DataFrame, key: str) -> list:

@@ -131,7 +131,7 @@
     <li><b>Profiles</b> 44 features per user-day and 19 per device-day against each entity's own history and its
       department, adapting over time but never learning suspicious days.</li>
     <li><b>Detects</b> deviations with three independent layers - robust statistics, an unsupervised ML ensemble
-      (Isolation Forest, LOF, autoencoder) and 21 MITRE ATT&amp;CK rules - fused into one 0-100 risk score that needs
+      (Isolation Forest, LOF, autoencoder) and 22 MITRE ATT&amp;CK rules - fused into one 0-100 risk score that needs
       corroboration before it alerts.</li>
     <li><b>Operates</b> continuously: a collector service scores only new data with saved models (identical to a full
       re-run), notifies analysts, groups alerts into cases, and the console is protected by roles and an audit trail.</li>
@@ -220,8 +220,8 @@
       TargetUserName → user); preview before import; the mapping is remembered.</dd>
     <dt class="why">Why</dt><dd>Real logs never use our column names. Without mapping the system could only analyse its own
       synthetic data.</dd>
-    <dt>How</dt><dd>Synonym lists per field; values normalised (Logon Failure / 4625 → failure, CORP\alice → alice, epoch
-      times, CPU 0-1 → %); de-duplicated append.</dd></dl></div>
+    <dt>How</dt><dd>Synonym lists per field, checked against the column's values (URLs, IPs, dates); values normalised (Logon Failure / 4625 → failure, CORP\alice → alice, epoch
+      times, CPU 0-1 → %); de-duplicated append. Linux auth.log / syslog text and Windows Security events (Event Viewer CSV, PowerShell, .evtx) are read directly; a file mixing event types is split by its type column.</dd></dl></div>
   <div class="feature"><h3>Drop folder, ingest API and endpoint agent <span class="where">ueba/workspace.py · api.py · agent.py</span></h3><dl>
     <dt>What</dt><dd>Files copied into a workspace inbox are imported automatically; agents and log shippers POST batches to
       a token-authenticated HTTP API; the agent streams a machine's CPU, memory and connections every 15 s.</dd>
@@ -260,7 +260,7 @@
       as benign always are.</dd></dl></div>
   <div class="feature"><h3>Three detection layers <span class="where">ueba/detectors.py</span></h3><dl>
     <dt>What</dt><dd>Statistics (largest z-scores above 3), an unsupervised ML ensemble (Isolation Forest, LOF, autoencoder)
-      trained on normal days only, and 21 rules mapped to ATT&amp;CK.</dd>
+      trained on normal days only, and 22 rules mapped to ATT&amp;CK.</dd>
     <dt class="why">Why</dt><dd>They fail differently: statistics explain, ML finds patterns nobody wrote a rule for, rules are
       precise for known techniques. No labels are needed - real organisations don't have them.</dd>
     <dt>How</dt><dd>Each ML score is calibrated so 1.0 = the 99th percentile of normal, then averaged.</dd></dl></div>
@@ -415,13 +415,13 @@ python -m ueba.replay --workspace live-demo --labels      # stream the company l
 python -m ueba.agent --url http://127.0.0.1:8600 --workspace lab --token ueba_...
 python run_pipeline.py --cert data/cert/r4.2              # CERT benchmark into its own workspace (~8 min)
 python experiments.py · experiments_cert.py · experiments_trend.py   # robustness / CERT / trend experiments
-python -m pytest -q                    # 28 tests</pre>
+python -m pytest -q                    # 32 tests</pre>
   <table>
     <tr><th style="width:30%">File</th><th>Responsibility</th></tr>
     <tr><td><code>ueba/generator.py</code></td><td>Simulated company, planted attacks, ground truth</td></tr>
     <tr><td><code>ueba/sources.py · ingest.py</code></td><td>Log-type detection, column mapping, normalisation, storage</td></tr>
     <tr><td><code>ueba/features.py · profiles.py</code></td><td>Behavioural features; personal and peer baselines</td></tr>
-    <tr><td><code>ueba/detectors.py · risk.py</code></td><td>Statistics, ML ensemble, 21 rules, explanations; risk fusion, alerts</td></tr>
+    <tr><td><code>ueba/detectors.py · risk.py</code></td><td>Statistics, ML ensemble, 22 rules, explanations; risk fusion, alerts</td></tr>
     <tr><td><code>ueba/pipeline.py</code></td><td>Full training run or incremental update; adaptive baseline with quarantine</td></tr>
     <tr><td><code>ueba/workspace.py</code></td><td>Workspaces, inbox, locking, learning → monitoring lifecycle</td></tr>
     <tr><td><code>ueba/service.py · api.py · agent.py · replay.py</code></td><td>Collector service; ingest API; endpoint agent; live replay</td></tr>
@@ -429,7 +429,7 @@ python -m pytest -q                    # 28 tests</pre>
     <tr><td><code>ueba/auth.py</code></td><td>Users, roles, password hashing, API tokens, audit log</td></tr>
     <tr><td><code>ueba/cert_loader.py · evaluate.py</code></td><td>CERT adapter; metrics, figures, reports</td></tr>
     <tr><td><code>dashboard/app.py · ui.py · views/</code></td><td>Console shell; per-session context; one module per page</td></tr>
-    <tr><td><code>tests/</code></td><td>28 tests: detection, ingestion, incremental equivalence, API, security, cases, service</td></tr>
+    <tr><td><code>tests/</code></td><td>32 tests: detection, ingestion, incremental equivalence, API, security, cases, service</td></tr>
   </table>
 </div>
 
@@ -502,9 +502,9 @@ python -m pytest -q                    # 28 tests</pre>
     <li>Daily granularity: alerts within seconds of data arriving, but no intra-day sequence detection.</li>
     <li>The agent can't measure bytes per connection; upload volumes should come from proxy / firewall logs.</li>
   </ul>
-  <div class="callout ok"><b>Cheat sheet.</b> 205,483 events · 108 entities · 44 + 19 features · 3 layers · 21 rules ·
+  <div class="callout ok"><b>Cheat sheet.</b> 205,483 events · 108 entities · 44 + 19 features · 3 layers · 22 rules ·
     threshold 45 (stats max 43.8) · precision 0.964 · F1 0.951 over 5 seeds · 0.857 without rules · CERT 3 → 22 of 36 ·
-    ~1 alert/day · update 2-3 s · 28 tests.</div>
+    ~1 alert/day · update 2-3 s · 32 tests.</div>
 </div>
 
 </body>

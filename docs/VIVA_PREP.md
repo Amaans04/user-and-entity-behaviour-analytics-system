@@ -17,6 +17,8 @@ phone or a second tab) with minimum severity *high*. Keep a terminal ready with:
 python -m ueba.replay --workspace viva-live --seconds-per-day 8 --labels
 ```
 
+If the panel hands you their own logs, follow `docs/PANEL_DATA_PLAYBOOK.md`.
+
 ## 2. Five-minute demo script
 
 | Time | Show | Say |

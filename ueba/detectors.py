@@ -160,8 +160,10 @@ RULES = [
          lambda d: d["new_countries"] > 0,
          lambda r: f"Login from {r.new_countries:.0f} country never seen for this user"),
     Rule("R05", "Privilege escalation by non-admin", 0.80, "T1068 Exploitation for Privilege Escalation", "user",
-         lambda d: (d["priv_esc"] > 0) & (~d["is_admin"].astype(bool)),
-         lambda r: f"{r.priv_esc:.0f} privilege-escalation actions by a non-admin account"),
+         lambda d: ((d["priv_esc"] > 0) & (~d["is_admin"].astype(bool))
+                    & (d.get("baseline_priv", pd.Series(0, index=d.index)) == 0)),
+         lambda r: f"{r.priv_esc:.0f} privilege-escalation actions by a non-admin account that never escalated "
+                   "privileges in its learning period"),
     Rule("R06", "Account manipulation", 0.50, "T1136 Create Account", "user",
          lambda d: d["account_changes"] > 0,
          lambda r: f"{r.account_changes:.0f} account creation / group change commands"),
@@ -197,6 +199,10 @@ RULES = [
                     & (d.get("baseline_removable", pd.Series(1, index=d.index)) == 0)),
          lambda r: f"{r.removable_media:.0f} removable-media events by an account that never used removable media "
                    "during its learning period"),
+    Rule("R17", "Login from a password-spray source", 0.80, "T1110.003 Password Spraying", "user",
+         lambda d: d.get("spray_success", pd.Series(0, index=d.index)) > 0,
+         lambda r: f"{r.spray_success:.0f} successful login(s) from an address that had just failed against "
+                   "several different accounts"),
     # ---- device rules ----
     Rule("D01", "Crypto-mining host", 0.80, "T1496 Resource Hijacking", "device",
          lambda d: d["mining_conns"] > 0,

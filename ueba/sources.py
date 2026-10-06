@@ -33,8 +33,8 @@ SCHEMA: dict[str, dict[str, tuple[bool, object, list[str]]]] = {
                               "login", "email", "principal", "uid", "subjectusername", "actor"]),
         "result": (True, None, ["outcome", "status", "success", "eventresult", "logonresult", "authresult",
                                 "eventid", "event_id"]),
-        "src_ip": (False, "", ["sourceip", "ipaddress", "clientip", "srcaddr", "sourceaddress", "remoteip",
-                               "callerip", "ip", "src"]),
+        "src_ip": (False, "", ["sourceip", "ipaddress", "clientip", "srcaddr", "sourceaddress", "srcaddress",
+                               "srcip", "sourceaddr", "clientaddress", "remoteip", "callerip", "ip", "src"]),
         "src_device": (False, "unknown", ["workstation", "workstationname", "sourcehost", "srchost", "client",
                                           "clientname", "sourcedevice", "pc"]),
         "dest_host": (False, "unknown", ["destination", "targethost", "desthost", "server", "computer",
@@ -66,13 +66,15 @@ SCHEMA: dict[str, dict[str, tuple[bool, object, list[str]]]] = {
         "user": (True, None, ["username", "account", "csusername", "uid", "email", "actor"]),
         "bytes_out": (True, None, ["bytessent", "sentbytes", "outbytes", "csbytes", "origbytes", "upload",
                                    "uploadbytes", "txbytes", "bytesout", "out"]),
-        "domain": (True, None, ["url", "host", "hostname", "csuri", "cshost", "query", "destdomain", "sni",
-                                "servername", "site", "destinationhost", "fqdn"]),
+        "domain": (True, None, ["url", "target", "destination", "website", "site", "uri", "csuri", "cshost",
+                                "query", "destdomain", "sni", "servername", "destinationhost", "fqdn", "host",
+                                "hostname"]),
         "device": (False, "unknown", ["sourcehost", "srchost", "computer", "computername", "pc", "workstation",
-                                      "machine", "client"]),
-        "src_ip": (False, "", ["sourceip", "srcaddr", "sourceaddress", "clientip", "cip", "origh", "src"]),
-        "dst_ip": (False, "", ["destip", "destinationip", "dstaddr", "destinationaddress", "serverip", "sip",
-                               "resph", "dst"]),
+                                      "machine", "client", "host", "hostname"]),
+        "src_ip": (False, "", ["sourceip", "srcaddr", "sourceaddress", "srcaddress", "srcip", "sourceaddr",
+                               "clientip", "clientaddress", "cip", "origh", "src"]),
+        "dst_ip": (False, "", ["destip", "destinationip", "dstaddr", "destinationaddress", "destaddress", "dstip",
+                               "destaddr", "serverip", "sip", "resph", "dst"]),
         "dst_port": (False, 0, ["destport", "destinationport", "dstport", "port", "respp", "serverport"]),
         "protocol": (False, "tcp", ["proto", "transport"]),
         "bytes_in": (False, 0, ["bytesreceived", "receivedbytes", "inbytes", "scbytes", "respbytes",
@@ -131,7 +133,8 @@ FILENAME_HINTS = {
     "devices": ("device", "asset", "host", "inventory", "cmdb", "computer"),
     "ground_truth": ("truth", "label", "answer", "incident"),
 }
-SUPPORTED = (".csv", ".jsonl", ".json", ".ndjson", ".txt", ".log", ".zip")
+SUPPORTED = (".csv", ".jsonl", ".json", ".ndjson", ".txt", ".log", ".evtx", ".zip")
+TEXT_LOG_NAMES = ("auth.log", "secure", "syslog", "messages")
 
 
 def _key(name: str) -> str:
@@ -141,18 +144,36 @@ def _key(name: str) -> str:
 # --------------------------------------------------------------------------
 # reading
 # --------------------------------------------------------------------------
+def _named(name: str, parsed: dict, kind: str) -> list[tuple[str, pd.DataFrame]]:
+    """Frames from a format parser, named so that the stream guess picks them up."""
+    if not parsed:
+        raise ValueError(f"Recognised a {kind}, but it holds no logins, privilege use or other security events "
+                         "this system analyses")
+    return [(f"{name} - {stream}", df) for stream, df in parsed.items()]
+
+
 def read_bytes(name: str, data: bytes) -> list[tuple[str, pd.DataFrame]]:
-    """Parse one uploaded file into (name, dataframe) pairs. ZIPs yield one pair per member."""
+    """Parse one uploaded file into (name, dataframe) pairs. ZIPs yield one pair per member.
+
+    Besides tables (CSV / JSON / JSON-lines) this understands Linux auth.log / syslog text,
+    Windows Event Viewer CSV exports, PowerShell event exports and raw .evtx files
+    (see ``parsers.py``)."""
+    from . import parsers
     low = name.lower()
     if low.endswith(".zip"):
         out = []
         with zipfile.ZipFile(io.BytesIO(data)) as z:
             for m in z.namelist():
                 base = m.rsplit("/", 1)[-1]
-                if m.endswith("/") or base.startswith((".", "__")) or not base.lower().endswith(SUPPORTED[:-1]):
+                b = base.lower()
+                if m.endswith("/") or base.startswith((".", "__")):
+                    continue
+                if not (b.endswith(SUPPORTED[:-1]) or any(t in b for t in TEXT_LOG_NAMES)):
                     continue
                 out += read_bytes(base, z.read(m))
         return out
+    if low.endswith(".evtx"):
+        return _named(name, parsers.parse_evtx(data), "Windows event log")
     text_head = data[:2048].lstrip()
     if low.endswith((".jsonl", ".ndjson")) or (low.endswith((".json", ".log", ".txt")) and text_head[:1] == b"{"):
         try:
@@ -161,15 +182,72 @@ def read_bytes(name: str, data: bytes) -> list[tuple[str, pd.DataFrame]]:
             pass
     if low.endswith(".json") and text_head[:1] == b"[":
         return [(name, pd.json_normalize(json.loads(data)))]
-    return [(name, pd.read_csv(io.BytesIO(data), sep=None, engine="python", on_bad_lines="skip"))]
+    head_text = data[:8192].decode("utf-8-sig", errors="replace")
+    if not low.endswith((".csv", ".json")) and parsers.looks_like_syslog(head_text):
+        return _named(name, parsers.parse_syslog(data.decode("utf-8", errors="replace")), "Linux auth / syslog file")
+    if parsers.looks_like_eventviewer_csv(head_text):
+        return _named(name, parsers.parse_eventviewer_csv(data), "Windows Event Viewer export")
+    df = pd.read_csv(io.BytesIO(data), sep=None, engine="python", on_bad_lines="skip")
+    if parsers.is_powershell_export(df):
+        return _named(name, parsers.parse_powershell(df), "PowerShell event export")
+    return [(name, df)]
 
 
 # --------------------------------------------------------------------------
 # guessing
 # --------------------------------------------------------------------------
-def guess_mapping(stream: str, columns: list[str]) -> dict[str, str | None]:
-    """Field -> source column. Exact names win, then synonyms; each column is used once."""
+_URLISH = re.compile(r"(://|^[a-z0-9_-]+(\.[a-z0-9_-]+)*\.[a-z]{2,}(/|:|$))", re.I)
+_IPLIKE = re.compile(r"^(\d{1,3}(\.\d{1,3}){3}|[0-9a-f]*:[0-9a-f:]+)$", re.I)
+
+
+def _share(col: pd.Series, test) -> float:
+    v = col.dropna().astype(str).str.strip()
+    v = v[v != ""].head(300)
+    return float(v.map(test).mean()) if len(v) else 0.0
+
+
+def _numeric_share(col: pd.Series) -> float:
+    v = col.dropna().head(300)
+    return float(pd.to_numeric(v, errors="coerce").notna().mean()) if len(v) else 0.0
+
+
+def _time_share(col: pd.Series) -> float:
+    v = col.dropna().head(200)
+    if not len(v):
+        return 0.0
+    if pd.api.types.is_numeric_dtype(v):
+        return 1.0
+    return float(pd.to_datetime(v.astype(str), errors="coerce", format="mixed").notna().mean())
+
+
+# What a column's *values* must look like before a name match is trusted (the name "Host" can be a
+# computer or a web site; the values tell which).
+VALUE_CHECKS = {
+    "timestamp": lambda c: _time_share(c) >= 0.6,
+    "domain": lambda c: _share(c, lambda x: bool(_URLISH.search(x)) or bool(_IPLIKE.match(x))) >= 0.6,
+    "src_ip": lambda c: _share(c, lambda x: bool(_IPLIKE.match(x))) >= 0.6,
+    "dst_ip": lambda c: _share(c, lambda x: bool(_IPLIKE.match(x))) >= 0.6,
+    "device": lambda c: _share(c, lambda x: "://" in x) < 0.2,
+    "src_device": lambda c: _share(c, lambda x: "://" in x) < 0.2,
+    "dest_host": lambda c: _share(c, lambda x: "://" in x) < 0.2,
+    "bytes_out": lambda c: _numeric_share(c) >= 0.6,
+    "bytes_in": lambda c: _numeric_share(c) >= 0.6,
+    "dst_port": lambda c: _numeric_share(c) >= 0.6,
+    "cpu_pct": lambda c: _numeric_share(c) >= 0.6,
+    "mem_pct": lambda c: _numeric_share(c) >= 0.6,
+    "lat": lambda c: _numeric_share(c) >= 0.6,
+    "lon": lambda c: _numeric_share(c) >= 0.6,
+}
+
+
+def guess_mapping(stream: str, columns: list[str], sample: pd.DataFrame | None = None) -> dict[str, str | None]:
+    """Field -> source column. Exact names win, then synonyms; each column is used once. With a
+    ``sample`` of the data, a candidate is only accepted if its values look right for the field."""
     keyed = {_key(c): c for c in columns}
+
+    def ok(fld, col):
+        check = VALUE_CHECKS.get(fld)
+        return sample is None or check is None or col not in sample or check(sample[col])
     used: set[str] = set()
     mapping: dict[str, str | None] = {}
     fields = SCHEMA[stream]
@@ -178,18 +256,18 @@ def guess_mapping(stream: str, columns: list[str]) -> dict[str, str | None]:
             if mapping.get(fld):
                 continue
             cands = [_key(fld)] if exact_pass else [_key(s) for s in syn]
-            hit = next((keyed[k] for k in cands if k in keyed and keyed[k] not in used), None)
+            hit = next((keyed[k] for k in cands if k in keyed and keyed[k] not in used and ok(fld, keyed[k])), None)
             mapping[fld] = hit
             if hit:
                 used.add(hit)
     return mapping
 
 
-def guess_stream(columns: list[str], filename: str = "") -> str:
+def guess_stream(columns: list[str], filename: str = "", sample: pd.DataFrame | None = None) -> str:
     fname = filename.lower()
     best, best_score = "auth", -1.0
     for stream, fields in SCHEMA.items():
-        m = guess_mapping(stream, columns)
+        m = guess_mapping(stream, columns, sample)
         req = [f for f, (r, _, _) in fields.items() if r]
         score = sum(1.0 for f in req if m[f]) / len(req) * 4
         score += sum(0.3 for f, (r, _, _) in fields.items() if not r and m[f])

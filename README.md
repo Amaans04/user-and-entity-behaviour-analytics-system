@@ -51,7 +51,7 @@ Other commands:
 | `python -m ueba.agent --url http://127.0.0.1:8600 --workspace lab --token …` | stream a machine's telemetry to the API |
 | `python -m ueba.replay --workspace NAME [--url … --token …]` | replay a dataset as a live feed |
 | `python experiments.py` | robustness (5 seeds) + ablation study → `reports/experiments.md` |
-| `python -m pytest -q` | 28 unit + integration tests |
+| `python -m pytest -q` | 32 unit + integration tests |
 | `python experiments_cert.py` | CERT r4.2 benchmark, both variants + held-out split → `reports/cert_r4.2.md` |
 
 ---
@@ -65,7 +65,7 @@ Other commands:
 | **Capture** network logs | same | outbound connections: domain, port, bytes in/out |
 | **Capture** resource-usage logs | same + `ueba/collector.py` | hourly CPU / memory / disk / process samples; **live capture from the real host** via psutil |
 | **Behavioural profiles** for users *and* devices | `ueba/features.py`, `ueba/profiles.py` | 44 user features and 19 device features per day; personal baseline, department peer baseline, usual hours, hosts, countries, domains |
-| **Identify deviations** | `ueba/detectors.py` | robust z-scores (personal + peer), ML ensemble (Isolation Forest, LOF, Autoencoder), 21 MITRE-mapped threat rules |
+| **Identify deviations** | `ueba/detectors.py` | robust z-scores (personal + peer), ML ensemble (Isolation Forest, LOF, Autoencoder), 22 MITRE-mapped threat rules |
 | **Risk-based alerts** | `ueba/risk.py` | fused 0-100 daily risk, decaying accumulated entity risk, severity, plain-English reasons, MITRE ATT&CK tags |
 | Presentation | `dashboard/` | Streamlit SOC console: overview, cases & alert triage, entity investigation, model performance, data sources, live monitor, log explorer, administration; refreshes live |
 | Analyst workflow | `ueba/cases.py` | alerts grouped into cases (status, assignee, notes); suppression of known-benign patterns with expiry and reason; CSV export |
@@ -226,6 +226,7 @@ mapping, value normalisation, de-duplicated append):
 | Route | For | How |
 |---|---|---|
 | Upload | one-off exports | Data sources → Add logs: auto-detects the log type and maps columns (`TimeCreated` → timestamp, `TargetUserName` → user, `cs_bytes` → bytes_out …), preview before import, mapping remembered for files with the same columns |
+| Text and Windows logs | Linux / Windows | Linux `auth.log` / syslog text, Windows Event Viewer CSV, PowerShell exports and raw `.evtx` are read directly; a file mixing several event types is split by its event-type column |
 | Drop folder | export jobs, `rsync`, SIEM forwarders | copy files into `data/workspaces/<id>/inbox/`; `auth__x.csv` forces the stream; bad files go to `inbox/failed/` with an `.error.txt` |
 | Ingest API | agents, scripts, log shippers | `POST /api/v1/workspaces/<id>/ingest/<stream>` with `Authorization: Bearer <token>`; JSON, JSON-lines or CSV; returns `202` and queues the batch in the inbox |
 | Endpoint agent | machines | `python -m ueba.agent …` sends CPU, memory, disk, processes and connections every 15 s; keeps data and retries while the server is unreachable |
@@ -374,7 +375,7 @@ InHouse Project/
 
 ## 6. Testing
 
-`python -m pytest -q` - 28 tests, ~50 s:
+`python -m pytest -q` - 32 tests, ~50 s:
 
 * **Detection** - haversine / impossible travel, hour rarity, deviation scoring, rules, risk fusion
   bounds, full pipeline catches the planted attacks with FPR < 2 %, no attacks in the baseline window,
@@ -404,6 +405,8 @@ InHouse Project/
 
 Python · pandas · NumPy · scikit-learn · SQLite · Streamlit · Plotly · Matplotlib · psutil · pytest
 (the service, API, agent and notifications use only the standard library).
+
+**On-the-spot datasets:** see `docs/PANEL_DATA_PLAYBOOK.md` and the practice packs built by `python docs/rehearsal/make_rehearsal.py`.
 
 ## 9. Limitations & future work
 

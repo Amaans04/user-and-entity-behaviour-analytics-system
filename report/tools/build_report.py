@@ -328,7 +328,7 @@ bullets([("Capture.", "Logs arrive by upload, drop folder, ingest API or agent a
                        "domains, USB use ...), computed only from earlier days, as a live system would."),
          ("Profiles.", "Every entity has a personal and a department-peer baseline that adapt over time, but suspicious "
                        "days are never learned."),
-         ("Detection.", "Robust statistics, an unsupervised ensemble (Isolation Forest, LOF, autoencoder) and 21 "
+         ("Detection.", "Robust statistics, an unsupervised ensemble (Isolation Forest, LOF, autoencoder) and 22 "
                         "ATT&CK-mapped rules score every day independently."),
          ("Risk and response.", "Scores are fused into a 0-100 risk weighted by asset criticality and accumulated over "
                                 "days; alerts carry plain-English reasons, are grouped into cases and notified."),
@@ -388,10 +388,10 @@ table("Table 6.2: Needs translated into features - and why each feature exists",
 par("h2", "6.3 Specification of the Product")
 table("Table 6.3: Main functional requirements", [
     ("ID", "Requirement"),
-    ("FR1", "Accept the four log streams as CSV, JSON or ZIP; detect the log type, map and validate columns, normalise values."),
+    ("FR1", "Accept the four log streams as CSV, JSON, ZIP, Linux auth.log / syslog text or Windows event exports (CSV, .evtx); split mixed files; map columns by name and content; normalise values."),
     ("FR2", "Collect continuously from a drop folder, a token-authenticated HTTP API and an endpoint agent."),
     ("FR3", "Compute 44 user and 19 device features per day; learn personal and peer baselines over a rolling 45 days."),
-    ("FR4", "Score each day with statistics, the ML ensemble and 21 rules; fuse into a 0-100 risk with criticality and decay."),
+    ("FR4", "Score each day with statistics, the ML ensemble and 22 rules; fuse into a 0-100 risk with criticality and decay."),
     ("FR5", "After the learning period, score new data incrementally with saved models, identical to a full re-run."),
     ("FR6", "Raise explained alerts; group them into cases with status, assignee and notes; allow audited suppression."),
     ("FR7", "Notify analysts of new or escalated alerts by webhook or e-mail, without duplicates."),
@@ -429,10 +429,12 @@ bullets([("Statistics:", "the three largest positive deviations above z = 3, for
          ("ML ensemble:", "Isolation Forest [19], LOF [20] and an autoencoder [21] (scikit-learn [18]) trained on "
                           "normal days only and calibrated so that 1 = the 99th percentile of normal. Why three: they "
                           "fail differently; why unsupervised: real organisations have almost no labelled attacks."),
-         ("Rules:", "21 rules mapped to ATT&CK, e.g. brute force (T1110), impossible travel (T1078), privilege "
+         ("Rules:", "22 rules mapped to ATT&CK, e.g. brute force (T1110), impossible travel (T1078), privilege "
                     "escalation by a non-admin (T1068), upload to a new domain (T1048), mining pools (T1496), log "
-                    "clearing (T1070) and removable media used by an account with no such history (T1052.001, added "
-                    "after the CERT evaluation, Section 10.4)."),
+                    "clearing (T1070), removable media used by an account with no such history (T1052.001, added "
+                    "after the CERT evaluation, Section 10.3) and a successful login from an address that just failed "
+                    "against several accounts (password spraying, T1110.003). Privilege escalation is judged against "
+                    "the account's own history, so routine administrator sudo is not flagged even without a staff list."),
          ("Fusion:", "A = 1 - (1 - 0.28 stat)(1 - 0.10 peer)(1 - 0.30 ml)(1 - rules); daily risk = 100 x min(1, A x "
                      "criticality); entity risk(t) = entity risk(t-1) x 0.5^(days/3) + max(0, daily risk - 15). An "
                      "alert is raised at daily risk 45 (critical at 80, high at 60) or when accumulated risk reaches 60. "
@@ -441,8 +443,10 @@ bullets([("Statistics:", "the three largest positive deviations above z = 3, for
 par("h3", "6.4.3 Continuous operation")
 par("p", "Each monitored environment is a workspace with its own logs, models, alerts and verdicts, moving from "
          "learning to monitoring once its learning period is covered. Logs arrive by upload (automatic column "
-         "mapping such as TimeCreated to timestamp, with a preview), a drop folder, a token-authenticated ingest API "
-         "or an endpoint agent that keeps data while the server is unreachable. Why four routes: real logs come from "
+         "mapping by column name and content, such as TimeCreated to timestamp, with a preview), a drop folder, a "
+         "token-authenticated ingest API or an endpoint agent that keeps data while the server is unreachable. Linux "
+         "auth.log / syslog text and Windows Security events (Event Viewer CSV, PowerShell export, .evtx) are read "
+         "directly, and a file mixing several event types is split by its event-type column. Why four routes: real logs come from "
          "exports, scripts, shippers and machines, and all of them end in the same import step.")
 par("p", "The engine trains the baselines and ML models once and saves them with a fingerprint of the settings; later "
          "analyses reuse them and score only the days from the earliest changed day onwards. Because every feature "
@@ -484,7 +488,7 @@ table("Table 7.1: Software", [
     ("Streamlit, Plotly", "1.50+, 5.18+", "Analyst console and charts"),
     ("SQLite", "bundled", "Logs, scores, alerts, cases, users, audit"),
     ("Python standard library", "bundled", "Ingest API, password hashing, notifications, locking"),
-    ("psutil, Matplotlib, pytest", "5.9+, 3.7+, 7.4+", "Agent telemetry, report figures, 28 tests"),
+    ("psutil, Matplotlib, pytest", "5.9+, 3.7+, 7.4+", "Agent telemetry, report figures, 32 tests"),
 ], widths=[2.0, 2.0, 2.6])
 par("h2", "7.3 Datasets")
 bullets([("Simulated organisation (primary):", "48 employees and 12 servers over 60 days, 205,483 events, 11 planted "
@@ -549,7 +553,7 @@ bullets([("Main run, robustness and ablation:", "seed 42; five differently gener
                         "development half only; a 7-day trend layer evaluated the same way."),
          ("Operation:", "incremental update compared with a full re-run; the organisation replayed through the ingest "
                         "API as a live feed."),
-         ("Tests:", "28 automated tests of detection, ingestion, the incremental engine, the API, security, cases and "
+         ("Tests:", "32 automated tests of detection, ingestion, the incremental engine, the API, security, cases and "
                     "notifications.")])
 
 # ================================================================= 10. RESULTS
@@ -629,7 +633,7 @@ par("h2", "11.1 Conclusion")
 par("p", "The project delivers a Python UEBA system that meets the problem statement and runs as a product. It captures "
          "four log streams from uploads, a drop folder, an authenticated API and an endpoint agent; profiles users and "
          "devices against adaptive, poisoning-resistant personal and peer baselines; detects deviations with robust "
-         "statistics, an unsupervised ensemble and 21 ATT&CK rules; and turns the evidence into explained, risk-ranked "
+         "statistics, an unsupervised ensemble and 22 ATT&CK rules; and turns the evidence into explained, risk-ranked "
          "alerts grouped into cases, notified to analysts and handled in a secured console. Incremental scoring is "
          "identical to a full re-run.")
 par("p", "On the simulated organisation it detected all 11 attacks on their first day with precision, recall and F1 of "
@@ -663,7 +667,7 @@ for text in [
     "flags deviations. This project builds a Python UEBA system and takes it from analytics to an operable product.",
     "Four kinds of logs (authentication, system access, network, resource usage) are turned into 44 daily features per "
     "user and 19 per device and compared with adaptive personal and department baselines that never learn suspicious "
-    "days. Robust statistics, an unsupervised ensemble (Isolation Forest, Local Outlier Factor, autoencoder) and 21 "
+    "days. Robust statistics, an unsupervised ensemble (Isolation Forest, Local Outlier Factor, autoencoder) and 22 "
     "MITRE ATT&CK rules are fused into a 0-100 risk score that requires agreement between layers, and every alert "
     "explains itself. Around this core, logs arrive by upload, drop folder, an authenticated API or an endpoint agent; "
     "a collector service scores new data incrementally - provably identical to a full re-run - and notifies analysts; "
@@ -705,7 +709,7 @@ for k, v in abbr.items():
 # ---------------------------------------------------------------- source code appendix: keep the first three excerpts
 sc = find("SOURCE CODE", "Heading 1")
 set_runs(Paragraph(sc._p.getnext(), sc._parent),
-         "The complete source code - about 6,000 lines of Python in 22 modules, the analyst console and 28 automated "
+         "The complete source code - about 6,000 lines of Python in 22 modules, the analyst console and 32 automated "
          "tests - is in the project folder and its Git repository. Three key parts of the detection logic are "
          "reproduced below.")
 code_heads = []

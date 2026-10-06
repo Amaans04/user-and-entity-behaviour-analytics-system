@@ -337,6 +337,7 @@ class Workspace:
         """Import every settled file in ``inbox/``. A file named ``<stream>__anything.ext``
         is forced to that stream; otherwise the saved mapping for the same columns is used,
         or the stream and columns are guessed. Bad files go to ``inbox/failed/`` with a reason."""
+        from . import parsers
         from .sources import convert, guess_mapping, guess_stream, mapping_signature, read_bytes
         results = []
         for p in self.inbox_files():
@@ -346,16 +347,26 @@ class Workspace:
                 if not parsed:
                     raise ValueError("no readable CSV / JSON content")
                 staged = []
+                forced_name = p.name.split("__", 1)[0] if "__" in p.name else None
+                if forced_name and forced_name not in SCHEMA:
+                    raise ValueError(f"unknown stream prefix '{forced_name}'")
+                units = []
                 for fname, raw in parsed:
-                    cols = [str(c) for c in raw.columns]
-                    raw.columns = cols
+                    raw.columns = [str(c) for c in raw.columns]
+                    mixed = None if forced_name else parsers.detect_mixed(raw)
+                    if mixed:               # one file, several kinds of events: split by the type column
+                        units += [(f"{fname} [{label}]", part, stream)
+                                  for label, stream, part in parsers.split_mixed(raw, *mixed)]
+                    else:
+                        units.append((fname, raw, forced_name))
+                for fname, raw, forced in units:
+                    cols = list(raw.columns)
                     sig = mapping_signature(cols)
-                    forced = p.name.split("__", 1)[0] if "__" in p.name else None
                     saved = self.saved_mapping(sig)
-                    if forced and forced not in SCHEMA:
-                        raise ValueError(f"unknown stream prefix '{forced}'")
-                    stream = forced or (saved["stream"] if saved else guess_stream(cols, fname))
-                    mapping = saved["mapping"] if saved and saved["stream"] == stream else guess_mapping(stream, cols)
+                    sample = raw.head(500)
+                    stream = forced or (saved["stream"] if saved else guess_stream(cols, fname, sample))
+                    mapping = (saved["mapping"] if saved and saved["stream"] == stream
+                               else guess_mapping(stream, cols, sample))
                     conv = convert(stream, raw, mapping)
                     if not conv.ok:
                         raise ValueError(f"{fname} as {stream}: " + "; ".join(conv.errors or ["no usable rows"]))

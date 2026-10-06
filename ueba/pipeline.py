@@ -87,6 +87,9 @@ def score_entities(feats: pd.DataFrame, cols: list, etype: str, train_start: str
     # removable-media use during the learning period (insider indicator R16: first-time USB users)
     F["baseline_removable"] = (F["entity"].map(F.loc[train_mask].groupby("entity")["removable_media"].sum())
                                .fillna(0).to_numpy() if "removable_media" in cols else 1.0)
+    # privilege use during the learning period: routine for that account (no admin list needed)
+    F["baseline_priv"] = (F["entity"].map(F.loc[train_mask].groupby("entity")["priv_esc"].sum())
+                          .fillna(0).to_numpy() if "priv_esc" in cols else 0.0)
     rule, hits = det.apply_rules(F, etype, cfg.disabled_rules)
 
     def zfor(idx):

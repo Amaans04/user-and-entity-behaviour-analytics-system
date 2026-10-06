@@ -277,3 +277,74 @@ def test_change_own_password(isolated):
         auth.change_password("ana", "wrong-password", "second-password")
     auth.change_password("ana", "first-password", "second-password")
     assert auth.authenticate("ana", "second-password")["role"] == "analyst"
+
+
+# ---------------------------------------------------------------- other log formats and mixed files
+def test_linux_auth_log_is_parsed():
+    from ueba import sources
+    text = ("Mar  3 09:12:01 bastion sshd[811]: Accepted publickey for alice from 10.0.0.5 port 50000 ssh2\n"
+            "Mar  3 09:15:44 bastion sshd[812]: Failed password for invalid user admin from 45.1.2.3 port 4444 ssh2\n"
+            "Mar  3 09:20:10 bastion sudo[900]: alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/apt update\n"
+            "Mar  3 23:59:00 bastion useradd[901]: new user: name=backdoor, UID=1099, GID=1099\n"
+            "Mar  3 10:00:00 bastion CRON[5]: (root) CMD (run-parts /etc/cron.hourly)\n").encode()
+    out = dict(sources.read_bytes("auth.log", text))
+    auth, acc = out["auth.log - auth"], out["auth.log - access"]
+    assert list(auth["result"]) == ["success", "failure"] and list(auth["user"]) == ["alice", "admin"]
+    assert set(acc["action"]) == {"priv_escalation", "write"} and "useradd backdoor" in set(acc["resource"])
+    assert sources.guess_stream(list(auth.columns), "auth.log - auth") == "auth"
+
+
+def test_windows_event_viewer_csv_is_parsed():
+    from ueba import sources
+    body = ("An account failed to log on.\n\nSubject:\n\tAccount Name:\t\tDC01$\n\nLogon Information:\n"
+            "\tLogon Type:\t\t3\n\nAccount For Which Logon Failed:\n\tAccount Name:\t\tbob\n\n"
+            "Network Information:\n\tWorkstation Name:\tPC-9\n\tSource Network Address:\t91.1.1.1\n")
+    clear = "The audit log was cleared.\nSubject:\n\tAccount Name:\tbob\n"
+    csv_text = ("Keywords,Date and Time,Source,Event ID,Task Category\n"
+                f'Audit Failure,6/20/2026 3:05:00 AM,Microsoft-Windows-Security-Auditing,4625,Logon,"{body}"\n'
+                f'Audit Success,6/20/2026 3:09:00 AM,Microsoft-Windows-Security-Auditing,1102,Log clear,"{clear}"\n')
+    out = dict(sources.read_bytes("Security.csv", csv_text.encode()))
+    auth, acc = out["Security.csv - auth"], out["Security.csv - access"]
+    assert auth.iloc[0][["user", "result", "src_ip", "src_device", "auth_type"]].tolist() == \
+        ["bob", "failure", "91.1.1.1", "PC-9", "network"]
+    assert acc.iloc[0]["resource"] == "wevtutil cl Security"            # matches the log-tampering rule
+
+
+def test_mixed_file_split_and_content_aware_mapping():
+    from ueba import parsers, sources
+    df = pd.DataFrame({
+        "EventTime": ["2026-08-01T09:00:00Z"] * 4, "EventType": ["Logon Success", "Logoff", "Web Request", "File Access"],
+        "Account": ["CORP\\ANA"] * 4, "Host": ["LT-1"] * 4,
+        "Target": ["vpn-gw", "LT-1", "https://mega.nz/upload", "/hr/payroll.xlsx"],
+        "BytesOut": [None, None, 3e9, None], "Operation": [None, None, None, "READ"], "Outcome": ["Success"] * 4})
+    col, assign = parsers.detect_mixed(df)
+    assert col == "EventType" and assign["Logoff"] is None
+    parts = {s: p for _, s, p in parsers.split_mixed(df, col, assign)}
+    assert set(parts) == {"auth", "network", "access"}
+    m = sources.guess_mapping("network", list(parts["network"].columns), parts["network"])
+    assert m["domain"] == "Target" and m["device"] == "Host"             # values, not just names, decide
+    # an auth log whose method column mentions vpn / ssh / web is NOT a mixed file
+    auth = pd.DataFrame({"time": ["2026-08-01"] * 3, "user": ["a"] * 3, "result": ["ok"] * 3,
+                         "method": ["vpn", "ssh", "web"]})
+    assert parsers.detect_mixed(auth) is None
+
+
+def test_password_spray_success_and_routine_admin_sudo():
+    from ueba.detectors import apply_rules
+    from ueba.features import spray_success
+    t0 = pd.Timestamp("2026-06-20 03:00")
+    rows = [dict(user=f"u{i}", src_ip="91.1.1.1", timestamp=t0 + pd.Timedelta(seconds=i), fail=1, ok=0) for i in range(6)]
+    rows.append(dict(user="vani", src_ip="91.1.1.1", timestamp=t0 + pd.Timedelta(minutes=5), fail=0, ok=1))
+    rows.append(dict(user="raj", src_ip="10.0.0.9", timestamp=t0 + pd.Timedelta(minutes=6), fail=0, ok=1))
+    a = pd.DataFrame(rows).assign(date="2026-06-20")
+    s = spray_success(a)
+    assert s.to_dict("records") == [dict(user="vani", date="2026-06-20", spray_success=1)]
+    base = {c: 0 for c in ["max_fail_10min", "fail_then_success", "impossible_travel", "new_countries", "account_changes",
+                           "log_tamper", "new_domain_upload_mb", "cloud_upload_mb", "mining_conns", "new_dest_hosts",
+                           "off_hours_access", "sensitive_access", "unregistered_device_logins", "job_site_visits",
+                           "new_sensitive_resources", "restricted_access", "baseline_restricted", "removable_media"]}
+    df = pd.DataFrame([dict(base, is_admin=False, department="x", priv_esc=0, spray_success=1),
+                       dict(base, is_admin=False, department="x", priv_esc=3, baseline_priv=40),   # routine sudo
+                       dict(base, is_admin=False, department="x", priv_esc=3, baseline_priv=0)])   # first time
+    _, hits = apply_rules(df, "user")
+    assert [h["rule_id"] for h in hits[0]] == ["R17"] and hits[1] == [] and [h["rule_id"] for h in hits[2]] == ["R05"]

@@ -10,7 +10,7 @@ import streamlit as st
 
 from dashboard.ui import *  # noqa: F401,F403 - palette, chart helpers, ctx, queries
 from dashboard.ui import ctx
-from ueba import auth, feedback, notify, service, sources as SRC, workspace as WS  # noqa: F401
+from ueba import auth, feedback, notify, parsers, service, sources as SRC, workspace as WS  # noqa: F401
 from ueba.config import CONFIG  # noqa: F401
 from ueba.detectors import LABELS  # noqa: F401
 
@@ -129,20 +129,70 @@ def mapping_editor(stream: str, cols: list[str], default: dict, key: str) -> dic
     return out
 
 
+STREAM_CHOICES = list(SRC.SCHEMA) + ["skip"]
+
+
+def _stream_label(s: str) -> str:
+    return "Skip" if s in ("skip", None) else SRC.STREAM_LABELS[s]
+
+
+def render_unit(ws, label: str, raw: pd.DataFrame, key: str, default_stream: str | None = None,
+                choose_stream: bool = True):
+    """Stream choice, column mapping, validation and preview for one table. Returns a ready tuple or None."""
+    cols = [str(c) for c in raw.columns]
+    raw.columns = cols
+    sig = SRC.mapping_signature(cols)
+    saved = ws.saved_mapping(sig)
+    guess = default_stream or (saved["stream"] if saved else SRC.guess_stream(cols, label, raw.head(500)))
+    if choose_stream:
+        stream = st.selectbox("This file contains", STREAM_CHOICES, index=STREAM_CHOICES.index(guess),
+                              key=f"st_{key}", format_func=_stream_label)
+    else:
+        stream = guess
+    if stream == "skip":
+        return None
+    if saved and saved["stream"] == stream:
+        default = saved["mapping"]
+        st.caption("Same columns as an earlier upload - reusing that mapping.")
+    else:
+        default = SRC.guess_mapping(stream, cols, raw.head(500))
+        st.caption("Columns matched automatically by name and content - check them, `*` = required.")
+    mapping = mapping_editor(stream, cols, default, key=f"map_{key}_{stream}")
+    conv = convert_cached(stream, key, json.dumps(mapping, sort_keys=True), raw)
+    for e in conv.errors:
+        st.error(e)
+    for w in conv.warnings:
+        st.warning(w)
+    if not conv.ok:
+        return None
+    sm = conv.summary()
+    m = st.columns(4)
+    m[0].metric("Rows usable", f"{sm['rows_kept']:,}")
+    m[1].metric("Days", sm.get("days", "–"))
+    m[2].metric("Users", sm.get("users", "–"))
+    m[3].metric("Devices", sm.get("devices", "–"))
+    if "first" in sm:
+        st.caption(f"{sm['first'][:16]} → {sm['last'][:16]}")
+    t1, t2 = st.tabs(["After mapping", "Original rows"])
+    t1.dataframe(conv.df.head(8), hide_index=True)
+    t2.dataframe(raw.head(8), hide_index=True)
+    return (label, stream, conv, mapping, sig)
+
+
 def upload_section():
     ws = ctx.ws
     st.markdown("### Add logs")
-    st.caption("CSV, JSON / JSON-lines or a ZIP of them - exports from a SIEM, Windows Event Viewer, a proxy, "
-               "Zeek, a VPN, `last`/`auth.log` converted to CSV, … New uploads are **appended** to what is "
-               "already here (duplicates are dropped), so you can add a day or a week at a time.")
+    st.caption("Tables (CSV, JSON, JSON-lines), Linux auth.log / syslog text, Windows Event Viewer CSV or PowerShell "
+               "exports, raw .evtx files, or a ZIP of any of these. A file that mixes several kinds of events is "
+               "split by its event-type column. New uploads are **appended** (duplicates are dropped), so you can "
+               "add a day or a week at a time.")
     nonce = st.session_state.get("upload_nonce", 0)
-    files = st.file_uploader("Log files", type=["csv", "jsonl", "ndjson", "json", "log", "txt", "zip"],
+    files = st.file_uploader("Log files", type=["csv", "jsonl", "ndjson", "json", "log", "txt", "evtx", "zip"],
                              accept_multiple_files=True, key=f"uploader_{ws.slug}_{nonce}",
                              label_visibility="collapsed")
     if not files:
         return
     ready = []
-    streams = list(SRC.SCHEMA) + ["skip"]
     for f in files:
         try:
             parsed = parse_upload(f.name, f.file_id, f.getvalue())
@@ -150,46 +200,40 @@ def upload_section():
             st.error(f"**{f.name}**: could not read the file ({e}).")
             continue
         if not parsed:
-            st.warning(f"**{f.name}**: no readable CSV/JSON files inside.")
+            st.warning(f"**{f.name}**: no readable log content inside.")
         for k, (fname, raw) in enumerate(parsed):
-            cols = [str(c) for c in raw.columns]
-            raw.columns = cols
-            sig = SRC.mapping_signature(cols)
-            saved = ws.saved_mapping(sig)
             key = f"{f.file_id}_{k}"
-            with st.expander(f"**{fname}** · {len(raw):,} rows · {len(cols)} columns", expanded=True):
-                guess = saved["stream"] if saved else SRC.guess_stream(cols, fname)
-                stream = st.selectbox("This file contains", streams, index=streams.index(guess), key=f"st_{key}",
-                                      format_func=lambda s: "Skip this file" if s == "skip" else SRC.STREAM_LABELS[s])
-                if stream == "skip":
+            raw.columns = [str(c) for c in raw.columns]
+            with st.expander(f"**{fname}** · {len(raw):,} rows · {len(raw.columns)} columns", expanded=True):
+                mixed = parsers.detect_mixed(raw)
+                split = False
+                if mixed:
+                    col, suggested = mixed
+                    split = st.toggle(f"This file mixes several kinds of events - split it by the **{col}** column",
+                                      value=True, key=f"split_{key}")
+                if not split:
+                    r = render_unit(ws, fname, raw, key)
+                    if r:
+                        ready.append(r)
                     continue
-                if saved and saved["stream"] == stream:
-                    default = saved["mapping"]
-                    st.caption("Same columns as an earlier upload - reusing that mapping.")
-                else:
-                    default = SRC.guess_mapping(stream, cols)
-                    st.caption("Columns matched automatically - check them, `*` = required.")
-                mapping = mapping_editor(stream, cols, default, key=f"map_{key}_{stream}")
-                conv = convert_cached(stream, key, json.dumps(mapping, sort_keys=True), raw)
-                for e in conv.errors:
-                    st.error(e)
-                for w in conv.warnings:
-                    st.warning(w)
-                if conv.ok:
-                    sm = conv.summary()
-                    m = st.columns(4)
-                    m[0].metric("Rows usable", f"{sm['rows_kept']:,}")
-                    m[1].metric("Days", sm.get("days", "–"))
-                    m[2].metric("Users", sm.get("users", "–"))
-                    m[3].metric("Devices", sm.get("devices", "–"))
-                    if "first" in sm:
-                        st.caption(f"{sm['first'][:16]} → {sm['last'][:16]}")
-                    t1, t2 = st.tabs(["After mapping", "Original file"])
-                    t1.dataframe(conv.df.head(8), hide_index=True)
-                    t2.dataframe(raw.head(8), hide_index=True)
-                    ready.append((fname, stream, conv, mapping, sig))
+                counts = raw[col].astype(str).str.strip().value_counts()
+                table = pd.DataFrame({"value": counts.index, "rows": counts.values,
+                                      "contains": [_stream_label(suggested.get(v)) for v in counts.index]})
+                edited = st.data_editor(
+                    table, hide_index=True, key=f"assign_{key}", disabled=["value", "rows"],
+                    column_config={"contains": st.column_config.SelectboxColumn(
+                        "Treat as", options=[_stream_label(x) for x in STREAM_CHOICES], required=True)})
+                back = {_stream_label(x): x for x in STREAM_CHOICES}
+                assign = {v: (None if back[c] == "skip" else back[c]) for v, c in zip(edited["value"], edited["contains"])}
+                st.caption("Logoff / disconnect events are skipped by default: they are not logins.")
+                for j, (label, stream, part) in enumerate(parsers.split_mixed(raw, col, assign)):
+                    st.markdown(f"**{_stream_label(stream)}** - {label} ({len(part):,} rows)")
+                    r = render_unit(ws, f"{fname} [{label}]", part, f"{key}_{j}_{stream}", default_stream=stream,
+                                    choose_stream=False)
+                    if r:
+                        ready.append(r)
     if ready:
-        if st.button(f"Import {len(ready)} file{'s' if len(ready) > 1 else ''} into {ws.name}", type="primary"):
+        if st.button(f"Import {len(ready)} part{'s' if len(ready) > 1 else ''} into {ws.name}", type="primary"):
             msgs = []
             with st.spinner("Importing…"):
                 for fname, stream, conv, mapping, sig in ready:
@@ -199,7 +243,7 @@ def upload_section():
                                 f"{r['added']:,} new rows ({r['total']:,} total)")
             st.session_state["upload_nonce"] = nonce + 1
             flash("success", "Imported. " + " · ".join(msgs) +
-                  " — press **Analyse now** (or let the collector service pick it up).")
+                  " - press **Analyse now** (or let the collector service pick it up).")
             st.rerun()
 
 
