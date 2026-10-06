@@ -37,18 +37,35 @@ CHUNK = 500_000
 DATE_FMT = "%m/%d/%Y %H:%M:%S"
 
 
-def _read_filtered(path: Path, users: set | None, usecols: list) -> pd.DataFrame:
+def _read_filtered(path: Path, users: set | None, usecols: list, per_chunk=None) -> pd.DataFrame:
+    """Stream a (possibly multi-GB) CERT csv, keep only ``users``; ``per_chunk`` can shrink each
+    chunk further before it is kept, so the whole file never has to fit in memory."""
     if not path.exists():
-        return pd.DataFrame(columns=usecols)
+        return pd.DataFrame(columns=usecols + ["timestamp"])
     out = []
     for chunk in pd.read_csv(path, usecols=lambda c: c in usecols, chunksize=CHUNK, dtype=str):
         chunk["user"] = chunk["user"].str.lower()
         if users is not None:
             chunk = chunk[chunk["user"].isin(users)]
-        out.append(chunk)
-    df = pd.concat(out, ignore_index=True) if out else pd.DataFrame(columns=usecols)
-    df["timestamp"] = pd.to_datetime(df["date"], format=DATE_FMT, errors="coerce")
-    return df.dropna(subset=["timestamp"])
+        chunk = chunk.assign(timestamp=pd.to_datetime(chunk["date"], format=DATE_FMT, errors="coerce"))
+        chunk = chunk.dropna(subset=["timestamp"])
+        out.append(per_chunk(chunk) if per_chunk else chunk)
+    return pd.concat(out, ignore_index=True) if out else pd.DataFrame(columns=usecols + ["timestamp"])
+
+
+def _domain(url) -> str:
+    u = str(url)
+    return urlparse(u if "//" in u else f"http://{u}").netloc.lower()
+
+
+def _http_visits(chunk: pd.DataFrame) -> pd.DataFrame:
+    """Collapse page views to one row per user / PC / day / domain (first visit time).
+
+    The behavioural features only use *which* domains were visited, when, and whether
+    they are new - not every page view - and CERT's HTTP log has ~28M rows (14 GB)."""
+    c = chunk.assign(domain=chunk["url"].map(_domain), day=chunk["timestamp"].dt.date)
+    c = c.sort_values("timestamp").drop_duplicates(["user", "pc", "day", "domain"])
+    return c[["date", "user", "pc", "timestamp", "domain"]]
 
 
 def _ip(pc: str) -> str:
@@ -70,10 +87,13 @@ def load_insiders(root: Path, dataset: str) -> pd.DataFrame:
     return ins
 
 
-def _malicious_days(root: Path, ins: pd.DataFrame) -> pd.DataFrame:
-    """Dates with malicious events, from answers/<dataset>-<scenario>/*.csv when present."""
+def _malicious_days(root: Path, ins: pd.DataFrame, dataset: str) -> pd.DataFrame:
+    """Dates with malicious events, from answers/<dataset>-<scenario>/*.csv when present.
+
+    Only this release's folders are read: CERT re-uses user ids across releases, so
+    answers from r4.1 / r5.2 / ... would mislabel innocent users of r4.2."""
     rows = []
-    for f in (root / "answers").glob("r*-*/*.csv"):
+    for f in (root / "answers").glob(f"{dataset}-*/*.csv"):
         for line in f.read_text(errors="ignore").splitlines():
             parts = [p.strip().strip('"') for p in line.split(",")]
             if len(parts) < 4:
@@ -104,7 +124,9 @@ def convert_cert(root: Path, out_dir: Path, max_users: int = 150, seed: int = 7,
     logon = _read_filtered(root / "logon.csv", users, ["date", "user", "pc", "activity"])
     device = _read_filtered(root / "device.csv", users, ["date", "user", "pc", "activity"])
     files = _read_filtered(root / "file.csv", users, ["date", "user", "pc", "filename"])
-    http = _read_filtered(root / "http.csv", users, ["date", "user", "pc", "url"])
+    http = _read_filtered(root / "http.csv", users, ["date", "user", "pc", "url"], per_chunk=_http_visits)
+    http = (http.assign(day=http["timestamp"].dt.date).sort_values("timestamp")      # visits split across chunks
+            .drop_duplicates(["user", "pc", "day", "domain"]).drop(columns="day"))
     email = _read_filtered(root / "email.csv", users, ["date", "user", "pc", "to", "size", "attachments"])
 
     # ---- auth ----
@@ -126,7 +148,7 @@ def convert_cert(root: Path, out_dir: Path, max_users: int = 150, seed: int = 7,
     ], ignore_index=True)
 
     # ---- network ----
-    dom = http["url"].map(lambda u: urlparse(u if "//" in str(u) else f"http://{u}").netloc.lower())
+    dom = http["domain"]
     net_http = pd.DataFrame({
         "timestamp": http["timestamp"], "user": http["user"], "device": http["pc"],
         "src_ip": http["pc"].map(_ip), "dst_ip": dom.map(lambda d: _ip(d).replace("10.", "142.", 1)),
@@ -146,8 +168,11 @@ def convert_cert(root: Path, out_dir: Path, max_users: int = 150, seed: int = 7,
     # ---- directory ----
     ldap_files = sorted((root / "LDAP").glob("*.csv"))
     if ldap_files:
-        ldap = pd.read_csv(ldap_files[-1], dtype=str)
+        # every monthly snapshot, latest entry per user wins - people who left the company
+        # (CERT scenario 2) are missing from the final month
+        ldap = pd.concat([pd.read_csv(f, dtype=str) for f in ldap_files], ignore_index=True)
         ldap.columns = [c.lower() for c in ldap.columns]
+        ldap = ldap.drop_duplicates("user_id", keep="last")
         ldap["user"] = ldap["user_id"].str.lower()
         ldap = ldap[ldap["user"].isin(users)]
         dept_col = "functional_unit" if "functional_unit" in ldap else "department"
@@ -169,7 +194,7 @@ def convert_cert(root: Path, out_dir: Path, max_users: int = 150, seed: int = 7,
                                "department": [dept.get(owner.get(p, ""), "unknown") for p in pcs]})
 
     # ---- ground truth ----
-    mal = _malicious_days(root, ins)
+    mal = _malicious_days(root, ins, dataset)
     if mal.empty and len(ins):  # fall back to whole insider windows (active days only)
         act = auth.assign(date=auth["timestamp"].dt.date.astype(str))[["user", "date"]].drop_duplicates()
         rows = []

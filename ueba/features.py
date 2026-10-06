@@ -18,7 +18,8 @@ from .config import CONFIG, Config
 
 CLOUD_STORAGE = ("mega.nz", "dropbox.com", "wetransfer.com", "transfer.sh", "anonfiles.io",
                  "drive.google.com", "mediafire.com", "file.io", "pastebin.com")
-JOB_SITES = ("linkedin.com/jobs", "indeed.com", "naukri.com", "monster.com", "glassdoor.com")
+JOB_SITES = ("linkedin.com/jobs", "indeed.com", "naukri.com", "monster.com", "glassdoor.com", "careerbuilder.com",
+             "simplyhired.com", "ziprecruiter.com", "dice.com")
 MINING_PORTS = (3333, 4444, 5555, 7777, 14444, 45700)
 ACCOUNT_CMDS = r"New-ADUser|useradd|net user .*/add|net group .*/add|Add-ADGroupMember"
 LOG_TAMPER = r"wevtutil cl|Clear-EventLog|rm -rf /var/log|auditctl -D"

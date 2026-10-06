@@ -255,6 +255,30 @@ class Workspace:
                 meta["dirty"] = True
         return dict(rows=len(new), added=int(added), total=len(merged))
 
+    def import_folder(self, src: Path, source: str = "folder") -> dict:
+        """Replace this workspace's logs with a folder already in the canonical schema (e.g. the
+        CERT adapter's output) - a bulk load that skips per-row mapping."""
+        if self.is_demo:
+            raise ValueError("The demo workspace is read-only")
+        with self.mutate() as meta:
+            self.raw_dir.mkdir(parents=True, exist_ok=True)
+            meta["streams"] = {}
+            for stream in SCHEMA:
+                f = Path(src) / f"{stream}.csv"
+                if not f.exists():
+                    continue
+                shutil.copyfile(f, self.stream_path(stream))
+                cols = ["timestamp"] if stream in LOG_STREAMS else None
+                df = pd.read_csv(f, usecols=cols)
+                info = dict(rows=len(df), updated=_now())
+                if cols and len(df):
+                    ts = pd.to_datetime(df["timestamp"], errors="coerce").dropna()
+                    info.update(first=str(ts.min()), last=str(ts.max()), days=int(ts.dt.normalize().nunique()))
+                meta["streams"][stream] = info
+            meta.setdefault("uploads", []).append(dict(file=str(src), stream="*", source=source, at=_now()))
+            meta["dirty"] = meta["needs_full"] = True
+        return meta["streams"]
+
     def clear_stream(self, stream: str):
         if self.is_demo:
             raise ValueError("The demo workspace is read-only")
