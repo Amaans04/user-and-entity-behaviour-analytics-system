@@ -27,7 +27,7 @@ Open <http://localhost:8501>. On first start you create the **administrator acco
 **Demo** workspace (a simulated 48-person company with 11 planted attacks) is already analysed.
 
 **Watch it catch attacks live** (best demo): in the dashboard create a workspace (sidebar →
-➕ New workspace, e.g. "Live demo"), then in a second terminal
+New workspace, e.g. "Live demo"), then in a second terminal
 
 ```bash
 python -m ueba.replay --workspace live-demo --labels
@@ -35,7 +35,7 @@ python -m ueba.replay --workspace live-demo --labels
 
 30 days of history are sent at once (the learning period), then one day every 20 s. The collector
 service imports, scores and alerts on each slice; the dashboard refreshes by itself, and if a webhook
-is configured (Data sources → 🔔 Notifications) a message arrives as each attack starts.
+is configured (Data sources → Notifications) a message arrives as each attack starts.
 
 Other commands:
 

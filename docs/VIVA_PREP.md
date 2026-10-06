@@ -10,7 +10,7 @@ python launch.py                       # console on http://localhost:8501 + serv
 ```
 
 In the console: sign in, create a workspace **Viva live** (learning period 30), and in
-Data sources → 🔔 Notifications add a webhook (e.g. a free https://webhook.site URL open on your
+Data sources → Notifications add a webhook (e.g. a free https://webhook.site URL open on your
 phone or a second tab) with minimum severity *high*. Keep a terminal ready with:
 
 ```bash

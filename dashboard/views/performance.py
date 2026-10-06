@@ -86,6 +86,6 @@ def page_performance():
     if rep.get("incidents"):
         st.markdown("**Incident-level detection (default threshold)**")
         inc = pd.DataFrame(rep["incidents"])
-        inc["detected"] = inc["detected"].map({True: "✅ yes", False: "❌ no"})
+        inc["detected"] = inc["detected"].map({True: "yes", False: "no"})
         st.dataframe(inc[["incident", "scenario", "mitre", "entities", "days", "detected", "first_alert",
                           "delay_days", "max_risk", "caught_by"]], hide_index=True)

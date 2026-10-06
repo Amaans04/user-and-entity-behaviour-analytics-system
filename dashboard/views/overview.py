@@ -49,7 +49,7 @@ def page_overview():
             key = pd.to_datetime(a["date"])
             key = key.dt.to_period("W").dt.start_time if weekly else key
             cnt = a.groupby(key).size().reindex(periods, fill_value=0)
-            fig.add_bar(x=periods, y=cnt.values, name=f"{SEV_ICON[sev]} {sev}", marker_color=SEV_COLOR[sev],
+            fig.add_bar(x=periods, y=cnt.values, name=sev.capitalize(), marker_color=SEV_COLOR[sev],
                         marker_line=dict(color="white", width=0 if weekly else 1.5),
                         hovertemplate="%{x|%d %b %Y}<br>%{y} " + sev + f" alerts<extra>per {unit}</extra>")
         fig.update_layout(barmode="stack", title=f"Alerts per {unit} by severity")

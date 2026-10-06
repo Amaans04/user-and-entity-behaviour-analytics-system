@@ -23,7 +23,7 @@ def gate() -> dict:
     st.session_state.pop("user", None)
 
     with _center():
-        st.markdown("## 🛡️ UEBA Console")
+        st.markdown("## UEBA Console")
         st.caption("AI-based User & Entity Behaviour Analytics")
         if not auth.has_users():
             st.markdown("#### Create the administrator account")

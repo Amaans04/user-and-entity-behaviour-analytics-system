@@ -99,7 +99,7 @@ def page_entity():
                     f"· ML {row['ml']:.2f} (IF {row['ml_iforest']:.2f}, LOF {row['ml_lof']:.2f}, "
                     f"AE {row['ml_autoencoder']:.2f}) · rules {row['rule']:.2f}")
         for h in json.loads(row["rule_hits"]):
-            st.markdown(f"- 🚩 **{h['name']}** – {h['message']} `{h['mitre']}`")
+            st.markdown(f"- **{h['name']}** – {h['message']} `{h['mitre']}`")
     with r:
         if etype == "user":
             au = Q("SELECT timestamp, date, result FROM auth WHERE user=?", (ent,))

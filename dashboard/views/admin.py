@@ -15,7 +15,7 @@ def page_admin():
         st.warning("Administrators only.")
         return
     me = ctx.user["username"]
-    t_users, t_tokens, t_audit, t_service = st.tabs(["👤 Users", "🔑 API tokens", "📜 Audit log", "⚙️ Service"])
+    t_users, t_tokens, t_audit, t_service = st.tabs(["Users", "API tokens", "Audit log", "Service"])
 
     with t_users:
         st.caption("**viewer** - read only · **analyst** - + triage alerts · **admin** - + data sources, "

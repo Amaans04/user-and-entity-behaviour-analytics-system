@@ -53,7 +53,7 @@ def status_card():
     icon, text = STATE_UI[stt["state"]]
     with st.container(border=True):
         a, b, c, d = st.columns([2, 1, 1, 1])
-        a.markdown(f"#### {icon} {text}")
+        a.markdown(f"#### {text}")
         if stt["state"] == "empty":
             a.caption("Upload at least one log stream below to get started.")
         elif stt["state"] == "needs_analysis":
@@ -70,10 +70,10 @@ def status_card():
         if ws.meta.get("last_error"):
             st.warning(f"Last automatic analysis was skipped: {ws.meta['last_error']}")
         if stt["inbox"]:
-            st.caption(f"📥 {stt['inbox']} file(s) waiting in the inbox for the collector service.")
+            st.caption(f"{stt['inbox']} file(s) waiting in the inbox for the collector service.")
         if stt["state"] != "empty" and can("manage") and (not ws.is_demo or stt["state"] == "needs_analysis"):
             b1, b2, _ = st.columns([1.2, 1.4, 3])
-            if b1.button("▶ Analyse now" if stt["state"] == "needs_analysis" else "↻ Analyse",
+            if b1.button("Analyse now" if stt["state"] == "needs_analysis" else "Analyse",
                          type="primary" if stt["state"] == "needs_analysis" else "secondary",
                          help="Incremental: re-uses the trained models and scores only new / changed days"):
                 analyse()
@@ -82,7 +82,7 @@ def status_card():
                                               "then re-score all history"):
                 analyse(full=True)
         if 0 < cov["days"] <= stt["learning_days"]:
-            st.caption(f"💡 You have {cov['days']} days of logs. Detection starts on day {stt['learning_days'] + 1}. "
+            st.caption(f"Tip: you have {cov['days']} days of logs. Detection starts on day {stt['learning_days'] + 1}. "
                        f"To start now, set the learning period below {cov['days']} days "
                        "(a shorter baseline knows less about normal behaviour, so expect more false positives).")
 
@@ -97,7 +97,7 @@ def streams_table():
     for stream, label in SRC.STREAM_LABELS.items():
         i = info.get(stream)
         row = st.columns([3, 1.2, 2.2, 2.2, 1, 1])
-        row[0].markdown(("✅ " if i else "▫️ ") + label)
+        row[0].markdown(label if i else f"<span class='muted'>{label}</span>", unsafe_allow_html=True)
         row[1].write(f"{i['rows']:,}" if i else "–")
         row[2].write(str(i.get("first", "–"))[:16] if i else "–")
         row[3].write(str(i.get("last", "–"))[:16] if i else "–")
@@ -157,7 +157,7 @@ def upload_section():
             sig = SRC.mapping_signature(cols)
             saved = ws.saved_mapping(sig)
             key = f"{f.file_id}_{k}"
-            with st.expander(f"📄 **{fname}** · {len(raw):,} rows · {len(cols)} columns", expanded=True):
+            with st.expander(f"**{fname}** · {len(raw):,} rows · {len(cols)} columns", expanded=True):
                 guess = saved["stream"] if saved else SRC.guess_stream(cols, fname)
                 stream = st.selectbox("This file contains", streams, index=streams.index(guess), key=f"st_{key}",
                                       format_func=lambda s: "Skip this file" if s == "skip" else SRC.STREAM_LABELS[s])
@@ -165,7 +165,7 @@ def upload_section():
                     continue
                 if saved and saved["stream"] == stream:
                     default = saved["mapping"]
-                    st.caption("✓ Same columns as an earlier upload - reusing that mapping.")
+                    st.caption("Same columns as an earlier upload - reusing that mapping.")
                 else:
                     default = SRC.guess_mapping(stream, cols)
                     st.caption("Columns matched automatically - check them, `*` = required.")
@@ -189,7 +189,7 @@ def upload_section():
                     t2.dataframe(raw.head(8), hide_index=True)
                     ready.append((fname, stream, conv, mapping, sig))
     if ready:
-        if st.button(f"⬆ Import {len(ready)} file{'s' if len(ready) > 1 else ''} into {ws.name}", type="primary"):
+        if st.button(f"Import {len(ready)} file{'s' if len(ready) > 1 else ''} into {ws.name}", type="primary"):
             msgs = []
             with st.spinner("Importing…"):
                 for fname, stream, conv, mapping, sig in ready:
@@ -207,7 +207,7 @@ def collection_section():
     ws = ctx.ws
     hb = service.read_heartbeat()
     alive = bool(hb and hb["alive"])
-    with st.expander(("🟢" if alive and ws.setting("auto_ingest") else "⚪") + " Automatic collection",
+    with st.expander("Automatic collection" + (" (on)" if alive and ws.setting("auto_ingest") else " (off)"),
                      expanded=not ws.meta.get("streams")):
         if alive:
             st.success(f"Collector service running - checks every {hb['interval']:g} s"
@@ -222,7 +222,7 @@ def collection_section():
             ws.update_settings(auto_ingest=auto)
             audit("settings.auto_ingest", str(auto))
             st.rerun()
-        t1, t2, t3, t4 = st.tabs(["📂 Drop folder", "🌐 Ingest API", "💻 Endpoint agent", "▶ Replay demo"])
+        t1, t2, t3, t4 = st.tabs(["Drop folder", "Ingest API", "Endpoint agent", "Replay demo"])
         with t1:
             st.markdown("Any CSV / JSON / ZIP file copied into this folder is imported on the next pass "
                         "(an export job, `rsync`, a SIEM forwarder …). Name a file `auth__anything.csv` to force "
@@ -249,7 +249,7 @@ def collection_section():
 
 def notifications_section():
     ws = ctx.ws
-    with st.expander("🔔 Notifications"):
+    with st.expander("Notifications"):
         st.caption("Sent by the collector service (and after manual analyses) for new or escalated alerts. "
                    "Slack, Microsoft Teams, Discord and most chat tools accept the webhook format.")
         with st.form("notify_form"):
@@ -295,7 +295,7 @@ def page_sources():
 
     if ws.is_demo:
         st.info("**Demo workspace** - a simulated 48-person company with 11 planted attacks, generated by the "
-                "log generator. It is read-only: create a workspace in the sidebar (**➕ New workspace**) to "
+                "log generator. It is read-only: create a workspace in the sidebar (**New workspace**) to "
                 "analyse your own logs.")
         c1, c2 = st.columns([1, 3])
         seed = c1.number_input("Random seed", 0, 99999, CONFIG.seed,
@@ -309,7 +309,7 @@ def page_sources():
         st.divider()
         collection_section()
         notifications_section()
-        with st.expander("⚙️ Settings"):
+        with st.expander("Settings"):
             days = st.number_input("Learning period (days)", WS.MIN_LEARNING_DAYS, 180, ws.learning_days,
                                    help="The first N days of logs teach the system what normal looks like; "
                                         "only later days are scored for threats. 30 is typical; shorter "
@@ -329,9 +329,9 @@ def page_sources():
                 flash("info", f"Alert threshold set to {th} - alerts are regenerated at the next analysis.")
                 st.rerun()
         if ws.meta.get("uploads"):
-            with st.expander(f"🕘 Upload history ({len(ws.meta['uploads'])})"):
+            with st.expander(f"Upload history ({len(ws.meta['uploads'])})"):
                 st.dataframe(pd.DataFrame(ws.meta["uploads"][::-1]), hide_index=True)
-        with st.expander("🗑 Delete workspace"):
+        with st.expander("Delete workspace"):
             st.caption("Removes this workspace's logs, profiles, alerts, analyst verdicts and models. Cannot be undone.")
             sure = st.checkbox(f"Yes, delete **{ws.name}**")
             if st.button("Delete workspace", disabled=not sure):
@@ -341,7 +341,7 @@ def page_sources():
                 flash("info", f"Workspace {ws.name} deleted.")
                 st.rerun()
 
-    with st.expander("📎 Expected formats & example files"):
+    with st.expander("Expected formats and example files"):
         st.markdown("Column names don't have to match - you map them on upload. What each stream needs "
                     "(**bold** = required):")
         for stream, label in SRC.STREAM_LABELS.items():

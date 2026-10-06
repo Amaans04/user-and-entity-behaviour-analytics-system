@@ -18,11 +18,11 @@ from ueba import auth
 # ---------------------------------------------------------------- palette
 BLUE, ORANGE, AQUA, VIOLET = "#2a78d6", "#eb6834", "#1baf7a", "#4a3aa7"
 SEV_COLOR = {"critical": "#d03b3b", "high": "#ec835a", "medium": "#fab219", "low": "#898781"}
-SEV_ICON = {"critical": "⛔", "high": "🔺", "medium": "⚠️", "low": "ℹ️"}
+SEV_ICON = {"critical": "", "high": "", "medium": "", "low": ""}
 SEV_ORDER = ["critical", "high", "medium", "low"]
 INK, INK2, MUTED, GRID, AXIS = "#0b0b0b", "#52514e", "#898781", "#e1e0d9", "#c3c2b7"
-STATE_UI = {"empty": ("⚪", "No data yet"), "needs_analysis": ("🟠", "New data - not analysed yet"),
-            "learning": ("🟡", "Learning normal behaviour"), "monitoring": ("🟢", "Monitoring")}
+STATE_UI = {"empty": ("", "No data yet"), "needs_analysis": ("", "New data - not analysed yet"),
+            "learning": ("", "Learning normal behaviour"), "monitoring": ("", "Monitoring")}
 
 CSS = """
 <style>
@@ -78,7 +78,7 @@ def show(fig, key: str | None = None):
 
 
 def sev_badge(sev: str) -> str:
-    return f'<span class="sev" style="background:{SEV_COLOR.get(sev, MUTED)}">{SEV_ICON.get(sev, "")} {sev.upper()}</span>'
+    return f'<span class="sev" style="background:{SEV_COLOR.get(sev, MUTED)}">{sev.upper()}</span>'
 
 
 # ---------------------------------------------------------------- data
@@ -167,7 +167,7 @@ def learning_banner():
     if ctx.monitoring:
         return
     days = ctx.status["coverage"]["days"]
-    st.info(f"🟡 **Learning normal behaviour - {min(days, ctx.status['learning_days'])} of "
+    st.info(f"**Learning normal behaviour - {min(days, ctx.status['learning_days'])} of "
             f"{ctx.status['learning_days']} days collected.** Profiles and models are built from these days; "
             f"alerts start once data after {ctx.meta.get('train_end')} arrives. Add newer logs in "
             "**Data sources**, or shorten the learning period there.")

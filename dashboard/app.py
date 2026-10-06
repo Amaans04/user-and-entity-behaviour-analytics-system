@@ -21,7 +21,7 @@ from dashboard.views import (admin, alerts, entity, live, login, logs, overview,
                              sources)
 from ueba import auth, service, workspace as WS  # noqa: E402
 
-st.set_page_config(page_title="UEBA Console", page_icon="🛡️", layout="wide")
+st.set_page_config(page_title="UEBA Console", layout="wide")
 ui.apply_css()
 
 ctx.user = login.gate()          # stops here with the sign-in screen when nobody is logged in
@@ -44,7 +44,7 @@ def _create_workspace():
 all_ws = {w.slug: w for w in WS.list_all()}
 if st.session_state.get("ws_current") not in all_ws:     # first load: take it from the URL (?ws=...)
     st.session_state["ws_current"] = st.query_params.get("ws") if st.query_params.get("ws") in all_ws else WS.DEMO
-st.sidebar.title("🛡️ UEBA Console")
+st.sidebar.title("UEBA Console")
 st.sidebar.caption("AI-based User & Entity Behaviour Analytics")
 slugs = list(all_ws)
 picked = st.sidebar.selectbox("Workspace", slugs, index=slugs.index(st.session_state["ws_current"]),
@@ -57,7 +57,7 @@ if st.query_params.get("ws") != picked:
 ctx.ws = WS.get(picked)
 ctx.DB = ctx.ws.db_path
 if ui.can("manage"):
-    with st.sidebar.expander("➕ New workspace"):
+    with st.sidebar.expander("New workspace"):
         st.text_input("Name", key="new_ws_name", placeholder="e.g. Lab network - Oct 2026")
         st.number_input("Learning period (days)", WS.MIN_LEARNING_DAYS, 180, 30, key="new_ws_days",
                         help="Days of history used to learn normal behaviour before alerts start.")
@@ -66,7 +66,7 @@ if ui.can("manage"):
 # ---------------------------------------------------------------- status
 ctx.status = ctx.ws.status()
 icon, text = STATE_UI[ctx.status["state"]]
-st.sidebar.markdown(f"**Status:** {icon} {text}")
+st.sidebar.markdown(f"**Status:** {text}")
 if ctx.status["state"] == "learning":
     done, need = learning_progress(ctx.status)
     st.sidebar.progress(done / need, text=f"Baseline {done}/{need} days")
@@ -74,11 +74,11 @@ hb = service.read_heartbeat()
 service_on = bool(hb and hb["alive"])
 if not ctx.ws.is_demo:
     auto = ctx.ws.setting("auto_ingest")
-    st.sidebar.caption(("🟢 Collector service running" if service_on else "⚪ Collector service not running")
+    st.sidebar.caption(("Collector service: running" if service_on else "Collector service: not running")
                        + (" · auto-collect on" if auto and service_on else ""))
 if ctx.status["state"] == "needs_analysis" and ui.can("manage") and not (service_on and ctx.ws.setting("auto_ingest")
                                                                         and not ctx.ws.is_demo):
-    if st.sidebar.button("▶ Analyse now", type="primary"):
+    if st.sidebar.button("Analyse now", type="primary"):
         ui.analyse()
 
 # ---------------------------------------------------------------- navigation
@@ -130,11 +130,11 @@ if has_results:
 
 st.sidebar.divider()
 c1, c2 = st.sidebar.columns([3, 2])
-c1.markdown(f"👤 **{ctx.user['username']}**  \n<span class='muted'>{ctx.user['role']}</span>",
+c1.markdown(f"**{ctx.user['username']}**  \n<span class='muted'>{ctx.user['role']}</span>",
             unsafe_allow_html=True)
 if c2.button("Sign out"):
     login.logout()
-with st.sidebar.popover("🔑 Change password"):
+with st.sidebar.popover("Change password"):
     with st.form("own_pw", clear_on_submit=True):
         old = st.text_input("Current password", type="password")
         new1 = st.text_input("New password", type="password")

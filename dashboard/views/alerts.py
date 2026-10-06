@@ -18,9 +18,9 @@ from dashboard.ui import *  # noqa: F401,F403 - palette, chart helpers, ctx, que
 from dashboard.ui import ctx
 from ueba import auth, cases, feedback
 
-STATUS_ICON = {"open": "🟡 open", "investigating": "🔵 investigating", "closed - benign": "⚪ closed - benign",
-               "closed - threat": "🔴 closed - threat", "confirmed threat": "🔴 confirmed threat",
-               "suppressed": "🔕 suppressed"}
+STATUS_ICON = {"open": "open", "investigating": "investigating", "closed - benign": "closed - benign",
+               "closed - threat": "closed - threat", "confirmed threat": "confirmed threat",
+               "suppressed": "suppressed"}
 
 
 def detector_bar(row) -> go.Figure:
@@ -74,7 +74,7 @@ def alert_detail(row, key: str):
 
 
 def suppress_form(row, key: str):
-    with st.popover("🔕 Suppress this pattern"):
+    with st.popover("Suppress this pattern"):
         st.caption(f"Stop alerting on **{row['title']}** for **{row['entity']}**. Alerts are still computed "
                    "and kept (marked suppressed) and the decision is audited.")
         scope = st.radio("For", [row["entity"], "everyone (*)"], horizontal=True, key=f"sscope_{key}")
@@ -122,7 +122,7 @@ def cases_tab(alerts):
                "click a row to open it")
     view = C[["case_id", "severity", "entity", "department", "first", "last", "alerts", "max_risk", "titles",
               "status", "assignee"]].copy()
-    view["severity"] = view["severity"].map(lambda s: f"{SEV_ICON[s]} {s}")
+    view["severity"] = view["severity"].map(str.capitalize)
     view["status"] = view["status"].map(lambda s: STATUS_ICON.get(s, s))
     ev = st.dataframe(view, hide_index=True, height=300, on_select="rerun", selection_mode="single-row", key="c_tbl",
                       column_config={"max_risk": st.column_config.ProgressColumn("Peak risk", min_value=0,
@@ -143,7 +143,7 @@ def cases_tab(alerts):
     left, right = st.columns([3, 2])
     with left:
         tl = CA[["date", "title", "severity", "risk_score", "status"]].copy()
-        tl["severity"] = tl["severity"].map(lambda s: f"{SEV_ICON[s]} {s}")
+        tl["severity"] = tl["severity"].map(str.capitalize)
         tl["status"] = tl["status"].map(lambda s: STATUS_ICON.get(s, s))
         st.markdown("**Alerts in this case**")
         ev2 = st.dataframe(tl, hide_index=True, height=min(250, 40 + 35 * len(tl)), on_select="rerun",
@@ -169,21 +169,21 @@ def cases_tab(alerts):
                 st.rerun()
             note = st.text_area("Note", key=f"note_{case['case_id']}", height=70,
                                 placeholder="What you checked, who you spoke to, what you decided")
-            b1, b2, b3 = st.columns(3)
-            if b1.button("📝 Add note", key=f"addn_{case['case_id']}") and note.strip():
+            if st.button("Add note", key=f"addn_{case['case_id']}") and note.strip():
                 cases.add_note(DB, case["case_id"], me, note)
                 audit("case.note", case["case_id"])
                 st.rerun()
+            b2, b3 = st.columns(2)
             if not closed:
-                if b2.button("✅ Benign", key=f"cb_{case['case_id']}", help="Close as benign - learned into the baseline"):
+                if b2.button("Close as benign", key=f"cb_{case['case_id']}", help="Close as benign - learned into the baseline"):
                     days = cases.close(DB, case["case_id"], alerts, "benign", me, note)
                     audit("case.close_benign", f"{case['case_id']} ({len(days)} days) {note}")
                     _after_change(days)
-                if b3.button("🚨 Threat", key=f"ct_{case['case_id']}", help="Close as a confirmed threat - never learned"):
+                if b3.button("Close as threat", key=f"ct_{case['case_id']}", help="Close as a confirmed threat - never learned"):
                     days = cases.close(DB, case["case_id"], alerts, "threat", me, note)
                     audit("case.close_threat", f"{case['case_id']} ({len(days)} days) {note}")
                     _after_change(days)
-            elif b2.button("↩ Reopen", key=f"ro_{case['case_id']}"):
+            elif b2.button("Reopen", key=f"ro_{case['case_id']}"):
                 days = cases.reopen(DB, case["case_id"], alerts, me)
                 audit("case.reopen", case["case_id"])
                 _after_change(days)
@@ -215,10 +215,10 @@ def alerts_tab(alerts):
     export = A.drop(columns=[c for c in ("stat", "peer", "ml", "rule") if c in A]).copy()
     for c in ("reasons", "mitre", "detectors"):
         export[c] = export[c].map(lambda x: "; ".join(json.loads(x)) if isinstance(x, str) else x)
-    c2.download_button("⬇ Export CSV", export.to_csv(index=False), f"alerts_{ctx.ws.slug}.csv", "text/csv")
+    c2.download_button("Export CSV", export.to_csv(index=False), f"alerts_{ctx.ws.slug}.csv", "text/csv")
     view = A[["alert_id", "date", "severity", "entity", "entity_type", "department", "title", "risk_score",
               "status"]].copy()
-    view["severity"] = view["severity"].map(lambda s: f"{SEV_ICON[s]} {s}")
+    view["severity"] = view["severity"].map(str.capitalize)
     view["status"] = view["status"].map(lambda s: STATUS_ICON.get(s, s))
     ev = st.dataframe(view, hide_index=True, height=320, on_select="rerun", selection_mode="single-row", key="a_tbl",
                       column_config={"risk_score": st.column_config.ProgressColumn(
@@ -236,15 +236,15 @@ def alerts_tab(alerts):
                          placeholder="e.g. user confirmed new project access")
     who = ctx.user["username"]
     b1, b2, b3, b4 = st.columns([1, 1, 1, 3])
-    if b1.button("✅ Benign", help="Mark as benign (false positive)", key=f"ben_{row['alert_id']}"):
+    if b1.button("Benign", help="Mark as benign (false positive)", key=f"ben_{row['alert_id']}"):
         feedback.record(DB, row["entity"], row["date"], "benign", note, analyst=who, alert_id=row["alert_id"])
         audit("alert.benign", f"{row['alert_id']} {row['entity']} {row['date']} {note}")
         _after_change([row["date"]])
-    if b2.button("🚨 Threat", help="Confirm as a real threat", key=f"thr_{row['alert_id']}"):
+    if b2.button("Threat", help="Confirm as a real threat", key=f"thr_{row['alert_id']}"):
         feedback.record(DB, row["entity"], row["date"], "threat", note, analyst=who, alert_id=row["alert_id"])
         audit("alert.threat", f"{row['alert_id']} {row['entity']} {row['date']} {note}")
         _after_change([row["date"]])
-    if row["status"] in ("closed - benign", "confirmed threat") and b3.button("↩ Reopen", key=f"clr_{row['alert_id']}"):
+    if row["status"] in ("closed - benign", "confirmed threat") and b3.button("Reopen", key=f"clr_{row['alert_id']}"):
         feedback.clear(DB, row["entity"], row["date"])
         audit("alert.reopen", f"{row['alert_id']} {row['entity']} {row['date']}")
         _after_change([row["date"]])
@@ -258,7 +258,7 @@ def alerts_tab(alerts):
 def suppressions_tab():
     sup = cases.list_suppressions(ctx.DB)
     if sup.empty:
-        st.info("No suppressions. Use **🔕 Suppress this pattern** on an alert to stop a known-benign pattern "
+        st.info("No suppressions. Use **Suppress this pattern** on an alert to stop a known-benign pattern "
                 "from alerting.")
         return
     alerts = ctx.alerts
@@ -290,7 +290,7 @@ def page_alerts():
     alerts = alerts.copy()
     alerts["status"] = alerts["status"].fillna("open")
     n_sup = len(cases.list_suppressions(ctx.DB, active_only=True))
-    t1, t2, t3 = st.tabs(["🗂 Cases", "🔔 All alerts", f"🔕 Suppressions ({n_sup})"])
+    t1, t2, t3 = st.tabs(["Cases", "All alerts", f"Suppressions ({n_sup})"])
     with t1:
         cases_tab(alerts)
     with t2:
