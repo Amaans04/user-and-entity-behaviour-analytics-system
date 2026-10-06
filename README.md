@@ -51,7 +51,7 @@ Other commands:
 | `python -m ueba.agent --url http://127.0.0.1:8600 --workspace lab --token …` | stream a machine's telemetry to the API |
 | `python -m ueba.replay --workspace NAME [--url … --token …]` | replay a dataset as a live feed |
 | `python experiments.py` | robustness (5 seeds) + ablation study → `reports/experiments.md` |
-| `python -m pytest -q` | 24 unit + integration tests |
+| `python -m pytest -q` | 28 unit + integration tests |
 | `python experiments_cert.py` | CERT r4.2 benchmark, both variants + held-out split → `reports/cert_r4.2.md` |
 
 ---
@@ -67,7 +67,8 @@ Other commands:
 | **Behavioural profiles** for users *and* devices | `ueba/features.py`, `ueba/profiles.py` | 44 user features and 19 device features per day; personal baseline, department peer baseline, usual hours, hosts, countries, domains |
 | **Identify deviations** | `ueba/detectors.py` | robust z-scores (personal + peer), ML ensemble (Isolation Forest, LOF, Autoencoder), 21 MITRE-mapped threat rules |
 | **Risk-based alerts** | `ueba/risk.py` | fused 0-100 daily risk, decaying accumulated entity risk, severity, plain-English reasons, MITRE ATT&CK tags |
-| Presentation | `dashboard/` | Streamlit SOC console: overview, alert triage, entity investigation, model performance, data sources, live monitor, log explorer, administration; refreshes live |
+| Presentation | `dashboard/` | Streamlit SOC console: overview, cases & alert triage, entity investigation, model performance, data sources, live monitor, log explorer, administration; refreshes live |
+| Analyst workflow | `ueba/cases.py` | alerts grouped into cases (status, assignee, notes); suppression of known-benign patterns with expiry and reason; CSV export |
 | Bring your own logs | `ueba/sources.py`, `ueba/workspace.py` | upload CSV/JSON/ZIP exports, automatic log-type detection and column mapping, per-dataset workspaces with a learning → monitoring lifecycle |
 | Continuous operation | `ueba/service.py`, `ueba/api.py`, `ueba/agent.py` | drop-folder + HTTP ingest API + endpoint agent; incremental scoring with saved models; runs unattended |
 | Alerting people | `ueba/notify.py` | webhook (Slack/Teams/Discord) and e-mail on new or escalated alerts, de-duplicated |
@@ -322,8 +323,10 @@ where quiet CERT insiders sit (statistical and ML layers rank CERT days at ROC-A
 insider indicator - removable-media use by an account with no removable-media history (R16, T1052.001),
 chosen on the development half (4 → 17 / 36) and never firing on the synthetic data - lifts the held-out
 result to 22 / 36 at under one alert a day. Gradual theft by job seekers (scenario 2), who already used
-USB drives, remains largely undetected; catching it needs behavioural scores that add up many small
-deviations (future work). The answer key labels 72 accounts: 70 insiders + 2 supervisors whose accounts
+USB drives, remains largely undetected. A 7-day trend layer was tried for them (`experiments_trend.py`,
+`reports/cert_trend_layer.md`): it raises ROC-AUC by ~0.1 but either catches no extra insider at a usable
+alert rate or multiplies alerts ~11x, and it worsens the top-k analyst budget, so it was **not adopted** -
+gradual insiders need sequence-aware models (future work). The answer key labels 72 accounts: 70 insiders + 2 supervisors whose accounts
 scenario-3 insiders misused. Full tables: `reports/cert_r4.2.md`; figure `reports/figures/cert_r4.2.png`.
 
 Figures for the report are generated in `reports/figures/`: ROC curves, PR curves, risk distribution,
@@ -371,7 +374,7 @@ InHouse Project/
 
 ## 6. Testing
 
-`python -m pytest -q` - 24 tests, ~75 s:
+`python -m pytest -q` - 28 tests, ~50 s:
 
 * **Detection** - haversine / impossible travel, hour rarity, deviation scoring, rules, risk fusion
   bounds, full pipeline catches the planted attacks with FPR < 2 %, no attacks in the baseline window,
@@ -379,6 +382,8 @@ InHouse Project/
 * **Ingestion** - foreign column names and values (`TimeCreated`, `CORP\Alice`, `4625`), partial streams.
 * **CERT** - adapter on a format-identical sample; answers of other releases never label users; R16 and
   the rule-disable switch.
+* **Workflow** - cases group alerts and closing records verdicts; suppressions hide but keep alerts; a
+  threshold change needs no re-training; users change their own password.
 * **Platform** - incremental update **equals** a full re-run (day boundary and mid-day); re-training
   is forced when models can't be reused; inbox import and rejection reasons; ingest API auth / scope /
   validation / queueing; password hashing, roles, lock-out, token scoping and revocation, audit;
