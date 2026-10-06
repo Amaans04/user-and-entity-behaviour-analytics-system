@@ -46,7 +46,7 @@ Other commands:
 | `python run_pipeline.py --threshold 50` | change the alert threshold |
 | `python run_pipeline.py --logs my_logs/` | one-off analysis of a folder of logs (CSV/JSONL, canonical columns) |
 | `python run_pipeline.py --workspace "Lab" [--retrain]` | analyse new data in a dashboard workspace (incremental) |
-| `python run_pipeline.py --cert /path/to/r4.2` | run on the **CMU CERT Insider Threat** dataset |
+| `python run_pipeline.py --cert data/cert/r4.2` | run on the **CMU CERT Insider Threat** benchmark (own workspace "CERT r4.2") |
 | `python -m ueba.service --api` | collector service on its own (inbox watcher, scoring, notifications, ingest API) |
 | `python -m ueba.agent --url http://127.0.0.1:8600 --workspace lab --token …` | stream a machine's telemetry to the API |
 | `python -m ueba.replay --workspace NAME [--url … --token …]` | replay a dataset as a live feed |
@@ -147,13 +147,17 @@ files and websites, plus 12 servers - **~205,000 events over 60 days**.
 | INC-10 | Impossible travel (Lagos) + 1.2 GB upload | T1078 / T1567 |
 | INC-11 | Admin account abuse: new AD accounts, security log cleared | T1136 / T1070 |
 
-**CERT Insider Threat dataset** (CMU SEI, public benchmark used in UEBA research). Download r4.2
-from <https://kilthub.cmu.edu/articles/dataset/Insider_Threat_Test_Dataset/12841247> together with
-`answers.tar.bz2`, place `answers/` inside the `r4.2` folder, then run
-`python run_pipeline.py --cert /path/to/r4.2`. The adapter maps logon → auth, device/file → access
-(USB), http/email → network, streams the multi-GB files in chunks, and samples 150 users (all
-insiders + random others). It is tested on a format-identical sample (`tests/cert_sample.py`);
-CERT has no resource-usage stream, so those features stay at zero.
+**CERT Insider Threat dataset** (CMU SEI, the public benchmark used in UEBA research; 1,000 simulated
+employees over 17 months, 70 malicious insiders in three scenarios). Download `r4.2.tar.bz2` (4.8 GB,
+~16 GB unpacked) and `answers.tar.bz2` from
+<https://kilthub.cmu.edu/articles/dataset/Insider_Threat_Test_Dataset/12841247>, unpack both into
+`data/cert/`, move `answers/` inside `r4.2/`, then run `python run_pipeline.py --cert data/cert/r4.2`.
+The adapter maps logon → auth, device/file → access (USB), http/email → network; streams the
+multi-GB files in chunks (HTTP page views are collapsed to one row per user, PC, day and domain, which is
+what the features use); reads every monthly LDAP snapshot so leavers keep their department; and labels
+only this release's malicious days. The result goes into its own workspace **CERT r4.2** with the
+attack-free months (Jan-May 2010) as the learning period, so the demo results are untouched. CERT has no
+resource-usage stream, so those features stay at zero.
 
 ### 3.2 Behavioural features (per entity per day)
 
