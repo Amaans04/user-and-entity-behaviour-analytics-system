@@ -51,7 +51,7 @@ Other commands:
 | `python -m ueba.agent --url http://127.0.0.1:8600 --workspace lab --token …` | stream a machine's telemetry to the API |
 | `python -m ueba.replay --workspace NAME [--url … --token …]` | replay a dataset as a live feed |
 | `python experiments.py` | robustness (5 seeds) + ablation study → `reports/experiments.md` |
-| `python -m pytest -q` | 32 unit + integration tests |
+| `python -m pytest -q` | 34 unit + integration tests |
 | `python experiments_cert.py` | CERT r4.2 benchmark, both variants + held-out split → `reports/cert_r4.2.md` |
 
 ---
@@ -62,12 +62,12 @@ Other commands:
 |---|---|---|
 | **Capture** authentication logs | `ueba/generator.py`, `ueba/ingest.py` | interactive, VPN, SSH, RDP, Kerberos logins with source IP, device and geo-location |
 | **Capture** system-access logs | same | file / application / privileged-command access with data-sensitivity labels |
-| **Capture** network logs | same | outbound connections: domain, port, bytes in/out |
+| **Capture** network and web logs | same + `ueba/web.py` | outbound connections (domain, port, bytes in/out) and, from a web proxy / gateway, the page visited, site category, allowed or blocked, and downloaded files |
 | **Capture** resource-usage logs | same + `ueba/collector.py` | hourly CPU / memory / disk / process samples; **live capture from the real host** via psutil |
-| **Behavioural profiles** for users *and* devices | `ueba/features.py`, `ueba/profiles.py` | 44 user features and 19 device features per day; personal baseline, department peer baseline, usual hours, hosts, countries, domains |
-| **Identify deviations** | `ueba/detectors.py` | robust z-scores (personal + peer), ML ensemble (Isolation Forest, LOF, Autoencoder), 22 MITRE-mapped threat rules |
+| **Behavioural profiles** for users *and* devices | `ueba/features.py`, `ueba/profiles.py` | 44 user features (+7 web-activity features when proxy logs are present) and 19 device features per day; personal baseline, department peer baseline, usual hours, hosts, countries, domains |
+| **Identify deviations** | `ueba/detectors.py` | robust z-scores (personal + peer), ML ensemble (Isolation Forest, LOF, Autoencoder), 26 MITRE-mapped threat rules |
 | **Risk-based alerts** | `ueba/risk.py` | fused 0-100 daily risk, decaying accumulated entity risk, severity, plain-English reasons, MITRE ATT&CK tags |
-| Presentation | `dashboard/` | Streamlit SOC console: overview, cases & alert triage, entity investigation, model performance, data sources, live monitor, log explorer, administration; refreshes live |
+| Presentation | `dashboard/` | Streamlit SOC console: overview, cases & alert triage, entity investigation, **user activity** (what a person browsed, downloaded, was blocked from and opened, with the out-of-character steps flagged), model performance, data sources, live monitor, log explorer, administration; refreshes live |
 | Analyst workflow | `ueba/cases.py` | alerts grouped into cases (status, assignee, notes); suppression of known-benign patterns with expiry and reason; CSV export |
 | Bring your own logs | `ueba/sources.py`, `ueba/workspace.py` | upload CSV/JSON/ZIP exports, automatic log-type detection and column mapping, per-dataset workspaces with a learning → monitoring lifecycle |
 | Continuous operation | `ueba/service.py`, `ueba/api.py`, `ueba/agent.py` | drop-folder + HTTP ingest API + endpoint agent; incremental scoring with saved models; runs unattended |
@@ -148,6 +148,7 @@ files and websites, plus 12 servers - **~205,000 events over 60 days**.
 | INC-09 | Password spray on an admin (no success) | T1110 |
 | INC-10 | Impossible travel (Lagos) + 1.2 GB upload | T1078 / T1567 |
 | INC-11 | Admin account abuse: new AD accounts, security log cleared | T1136 / T1070 |
+| INC-12 | Web-filter evasion: blocked 7 times on file-sharing sites, switches to a web proxy, downloads nmap and mimikatz, uploads 1.2 GB through the proxy | T1090 / T1105 |
 
 **CERT Insider Threat dataset** (CMU SEI, the public benchmark used in UEBA research; 1,000 simulated
 employees over 17 months, 70 malicious insiders in three scenarios). Download `r4.2.tar.bz2` (4.8 GB,
@@ -227,6 +228,7 @@ mapping, value normalisation, de-duplicated append):
 |---|---|---|
 | Upload | one-off exports | Data sources → Add logs: auto-detects the log type and maps columns (`TimeCreated` → timestamp, `TargetUserName` → user, `cs_bytes` → bytes_out …), preview before import, mapping remembered for files with the same columns |
 | Text and Windows logs | Linux / Windows | Linux `auth.log` / syslog text, Windows Event Viewer CSV, PowerShell exports and raw `.evtx` are read directly; a file mixing several event types is split by its event-type column |
+| Web proxy logs | Squid / gateways | Squid `access.log` and web-gateway CSV exports (Zscaler-style columns): full URL, site category, allowed / blocked (TCP_DENIED, 403, Blocked), downloads; categories fall back to a built-in list of well-known sites |
 | Drop folder | export jobs, `rsync`, SIEM forwarders | copy files into `data/workspaces/<id>/inbox/`; `auth__x.csv` forces the stream; bad files go to `inbox/failed/` with an `.error.txt` |
 | Ingest API | agents, scripts, log shippers | `POST /api/v1/workspaces/<id>/ingest/<stream>` with `Authorization: Bearer <token>`; JSON, JSON-lines or CSV; returns `202` and queues the batch in the inbox |
 | Endpoint agent | machines | `python -m ueba.agent …` sends CPU, memory, disk, processes and connections every 15 s; keeps data and retries while the server is unreachable |
@@ -274,30 +276,31 @@ older than the newest data) stay quiet; every attempt, including failures, is lo
 
 | Metric | Value |
 |---|---|
-| Incidents detected | **11 / 11** (all on the day they started) |
-| Precision / Recall / F1 | **0.964 / 0.964 / 0.964** |
-| False-positive rate | 0.04 % of normal entity-days (1 false alert in 30 days) |
-| Alerts per day | ~0.9 for 108 monitored entities |
-| Fused ROC-AUC / PR-AUC | 1.000 / 0.999 |
+| Incidents detected | **12 / 12** (all on the day they started) |
+| Precision / Recall / F1 | **0.935 / 0.967 / 0.951** |
+| False-positive rate | 0.09 % of normal entity-days (2 false alerts in 30 days) |
+| Alerts per day | ~1.0 for 108 monitored entities |
+| Fused ROC-AUC / PR-AUC | 1.000 / 0.996 |
 
-**Robustness over 5 different simulated companies:** mean precision 0.938, recall 0.964, F1 0.951,
-11/11 incidents detected every time (`reports/experiments.md`).
+**Robustness over 5 different simulated companies:** mean precision 0.923, recall 0.967, F1 0.945,
+12/12 incidents detected every time (`reports/experiments.md`).
 
 **Ablation (what each layer adds, mean of 5 seeds):**
 
 | Variant | PR-AUC | F1 |
 |---|---|---|
-| Full system | 0.996 | 0.951 |
-| Behaviour only (no rules) | 0.951 | 0.857 |
-| ML ensemble only | 0.856 | 0.789 |
-| Personal baseline only | 0.457 | 0.451 |
-| Threat rules only | 0.965 | 0.982 |
+| Full system | 0.996 | 0.945 |
+| Behaviour only (no rules) | 0.953 | 0.854 |
+| ML ensemble only | 0.917 | 0.856 |
+| Personal baseline only | 0.487 | 0.468 |
+| Threat rules only | 0.967 | 0.983 |
 
 **Honest interpretation (synthetic):** rules score very high because they were written for these known attack
 types. The value of the behavioural/ML layers is that they need **no prior knowledge of the attack** -
-with rules switched off, the system still reaches F1 0.86. Combining them gives the best ranking
-(PR-AUC 0.996). The one remaining false positive is a planted benign oddity (an HR user joining a new
-project and opening 11 unfamiliar files) - genuinely unusual behaviour that an analyst would close in seconds. Synthetic data is cleaner than real logs, so the CERT run is the more realistic benchmark.
+with rules switched off, the system still reaches F1 0.85, and the ML ensemble alone improved from F1 0.79 to
+0.86 once web activity was profiled. Combining them gives the best ranking (PR-AUC 0.996). The two false
+positives are planted benign oddities (a 20 GB backup, and an HR user joining a new project and opening 11
+unfamiliar files) - genuinely unusual behaviour that an analyst would close in seconds. Synthetic data is cleaner than real logs, so the CERT run is the more realistic benchmark.
 
 ### 4.1 CERT r4.2 benchmark (independent data)
 
@@ -375,7 +378,7 @@ InHouse Project/
 
 ## 6. Testing
 
-`python -m pytest -q` - 32 tests, ~50 s:
+`python -m pytest -q` - 34 tests, ~55 s:
 
 * **Detection** - haversine / impossible travel, hour rarity, deviation scoring, rules, risk fusion
   bounds, full pipeline catches the planted attacks with FPR < 2 %, no attacks in the baseline window,
@@ -406,18 +409,19 @@ InHouse Project/
 Python · pandas · NumPy · scikit-learn · SQLite · Streamlit · Plotly · Matplotlib · psutil · pytest
 (the service, API, agent and notifications use only the standard library).
 
-**On-the-spot datasets:** see `docs/PANEL_DATA_PLAYBOOK.md` and the practice packs built by `python docs/rehearsal/make_rehearsal.py`.
+**On-the-spot datasets:** see `docs/PANEL_DATA_PLAYBOOK.md` and the practice packs built by `python docs/data/make_rehearsal.py`.
 
 ## 9. Limitations & future work
 
 * **Quiet insiders.** On CERT r4.2 the behavioural layers barely separate malicious from normal days
   (ROC-AUC ≈ 0.54) because they ignore small deviations; continuous, per-organisation calibrated scores
-  are needed to catch gradual insiders (CERT scenario 2). Precision on the synthetic data (0.964) is an
+  are needed to catch gradual insiders (CERT scenario 2). Precision on the synthetic data (0.935) is an
   upper bound.
 * **More validation.** CERT r5.2 / r6.2 and real Windows Event / Sysmon / Zeek logs (which can be
   uploaded or shipped to the API today).
-* The agent can't measure bytes per connection without packet capture, so upload volumes should come
-  from proxy / firewall logs.
+* The agent can't measure bytes per connection without packet capture, so upload volumes and web pages
+  should come from proxy / firewall logs (Squid and gateway CSV exports are read directly). HTTPS pages are
+  only visible where the proxy inspects TLS; otherwise only the site is known.
 * Daily granularity: an attack is detected within one service pass of its data arriving, but features
   are per day; per-event streaming scoring (e.g. Kafka) would add intra-day sequence detection.
 * SQLite and CSV storage suit one organisation of hundreds of users; larger deployments would move to

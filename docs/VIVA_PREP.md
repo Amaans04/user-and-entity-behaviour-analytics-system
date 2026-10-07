@@ -24,9 +24,10 @@ If the panel hands you their own logs, follow `docs/PANEL_DATA_PLAYBOOK.md`.
 | Time | Show | Say |
 |---|---|---|
 | 0:00 | Sign-in screen | "A security tool has to be secure itself: roles, hashed passwords, lock-out after 5 failures, and every action is audited." |
-| 0:30 | **Demo** workspace → Overview | "A simulated 48-person company, 205k events over 60 days, 11 planted attacks and 4 harmless-but-odd events. All 11 caught on the first day, 1 false alert in 30 days." |
+| 0:30 | **Demo** workspace → Overview | "A simulated 48-person company, 206k events over 60 days, 12 planted attacks and 4 harmless-but-odd events. All 12 caught on the first day, 2 false alerts in 30 days." |
 | 1:15 | Alerts → open the **impossible travel** or **exfiltration** alert | "Every alert explains itself: *3,300 MB uploaded vs usual 1.2* - and shows which layers agreed. The threshold is set so statistics alone can never alert; ML or a rule must corroborate." |
 | 2:00 | **Investigate →** | "Each user's learned baseline - hours, countries, hosts - the risk timeline, and the exact deviations that day." |
+| 2:15 | Alerts → **nisha.menon** → **What they did** (User activity page, flagged steps) | "And this is what she actually did: blocked seven times on file-sharing sites, switched to a web proxy, downloaded nmap and mimikatz, opened finance files for the first time and pushed 1.2 GB out through the proxy. The score says how unusual the day was; this page says what happened." |
 | 2:30 | Start the replay in the terminal, switch to **Viva live** → Overview | "Now as a live system: 30 days of history arrive, it learns, then one day every 8 seconds. Nobody clicks anything." |
 | 3:30 | Wait for INC-01 (day 4): alert appears, webhook fires on the phone | "Brute force from a Tor exit node - detected and notified within one service pass. The models were trained once; each update scores only the new data in ~2 s, and that is provably identical to re-running everything." |
 | 4:15 | **CERT r4.2** workspace → Model performance (or `reports/figures/cert_r4.2.png`) | "And on the public CMU CERT benchmark, which I did not design: out of the box it found only 3 of 36 held-out insiders - the behavioural layers were tuned on loud attacks. One generic indicator, first-time USB use, chosen on a separate development half, raised that to 22 of 36 at under one alert a day. Job-hunting insiders are still mostly missed - that's my main future work." |
@@ -42,7 +43,7 @@ flag new techniques. Labels are used only to measure performance.
 **Your results are on data you generated yourself - isn't that circular?**
 Yes, that is the main limitation, which is why: (1) the attacks are realistic MITRE ATT&CK techniques
 mixed with benign oddities that look suspicious; (2) results hold over five differently generated
-companies (mean F1 0.951); (3) the ablation shows the behavioural layers alone reach F1 0.857 without
+companies (mean F1 0.945); (3) the ablation shows the behavioural layers alone reach F1 0.854 without
 any rules; and (4) the system was run on CERT r4.2, a benchmark built by CMU that I had no part in.
 
 **Rules alone score F1 0.98 - so why the ML?**
@@ -81,6 +82,19 @@ README §7 and §9.
 0.04 % of normal entity-days on the demo (≈ 1 alert per day for 108 entities). SOC studies report
 analysts overwhelmed by false positives (Alahmadi et al., "99% false positives"); the corroboration
 threshold, explanations and feedback loop were designed around that.
+
+**Can it see what a user did on the internet - pages, downloads, blocked sites?**
+Yes, from the web-proxy log (Squid `access.log` or a gateway CSV such as Zscaler). Each request gives the page,
+the site's category, whether it was allowed or blocked, and the downloaded file. Seven per-user features (pages,
+blocked requests, blocked sites, risky-site visits, new kinds of site, downloads, executable downloads) join the
+behaviour models, and four rules catch a burst of blocks, getting round the filter with a proxy or VPN (T1090),
+an executable from a never-visited site (T1105) and first visits to hacking sites. The **User activity** page shows
+the person's day as a flagged story. It is metadata only - which page, never its content - and HTTPS pages are visible
+only if the proxy inspects TLS.
+
+**Why didn't precision go up when you added web activity?**
+Detection went from 11/11 to 12/12 and the ML ensemble alone improved from F1 0.79 to 0.86, but one more benign
+oddity (a 20 GB backup) now crosses the threshold, so precision is 0.935 instead of 0.964. I report it as it is.
 
 ## 4. CERT r4.2 results (know these by heart)
 

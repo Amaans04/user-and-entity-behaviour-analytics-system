@@ -16,4 +16,4 @@ data/cert/
 data/raw/
 *.tmp
 data/cert_eval/
-docs/rehearsal/*.zip
+docs/data/*.zip

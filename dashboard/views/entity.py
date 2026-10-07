@@ -124,5 +124,10 @@ def page_entity():
     col = "user" if etype == "user" else "device"
     ev = Q(f"SELECT timestamp, source, action, target, outcome, detail, device, user FROM events "
            f"WHERE {col}=? AND date=? AND source != 'resource' ORDER BY timestamp", (ent, day))
-    st.markdown(f"**Event timeline – {day}** ({len(ev):,} events)")
+    h, b = st.columns([4, 1])
+    h.markdown(f"**Event timeline – {day}** ({len(ev):,} events)")
+    if etype == "user" and b.button("Open user activity", key="to_activity"):
+        st.session_state["entity"], st.session_state["entity_date"] = ent, day
+        goto("User activity")
+        st.rerun()
     st.dataframe(ev, hide_index=True, height=300)

@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from dashboard import ui  # noqa: E402
 from dashboard.ui import Q, STATE_UI, ctx, learning_progress, table_exists  # noqa: E402
-from dashboard.views import (admin, alerts, entity, live, login, logs, overview, performance,  # noqa: E402
+from dashboard.views import (activity, admin, alerts, entity, live, login, logs, overview, performance,  # noqa: E402
                              sources)
 from ueba import auth, service, workspace as WS  # noqa: E402
 
@@ -83,7 +83,7 @@ if ctx.status["state"] == "needs_analysis" and ui.can("manage") and not (service
 
 # ---------------------------------------------------------------- navigation
 has_results = table_exists("scores")
-PAGES = (["Overview", "Alerts", "Investigate entity", "Model performance"] if has_results else []) + \
+PAGES = (["Overview", "Alerts", "Investigate entity", "User activity", "Model performance"] if has_results else []) + \
         ["Data sources", "Live host monitor"] + (["Log explorer"] if has_results else []) + \
         (["Administration"] if ui.can("manage") else [])
 if st.session_state.get("page_current") not in PAGES:
@@ -149,6 +149,6 @@ with st.sidebar.popover("Change password"):
                 st.error(str(e))
 
 ui.show_flash()
-{"Overview": overview.page_overview, "Alerts": alerts.page_alerts, "Investigate entity": entity.page_entity,
+{"Overview": overview.page_overview, "Alerts": alerts.page_alerts, "Investigate entity": entity.page_entity, "User activity": activity.page_activity,
  "Model performance": performance.page_performance, "Data sources": sources.page_sources,
  "Live host monitor": live.page_live, "Log explorer": logs.page_logs, "Administration": admin.page_admin}[page]()

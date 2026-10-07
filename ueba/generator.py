@@ -4,7 +4,7 @@ Produces four log streams for a fictional ~50-person company:
 
 * auth.csv      - authentication events (interactive, VPN, SSH, RDP, Kerberos)
 * access.csv    - system / file / application access events
-* network.csv   - outbound network connections (bytes, domain, port)
+* network.csv   - web-proxy / network log (page URL, site category, allowed or blocked, bytes)
 * resource.csv  - hourly CPU / memory / disk / process samples per device
 
 plus ``ground_truth.csv`` describing every planted attack so detection quality
@@ -25,6 +25,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from . import web
 from .config import CONFIG, DATA_DIR, Config
 
 # --------------------------------------------------------------------------
@@ -93,6 +94,29 @@ FILE_WORDS = ["report", "plan", "budget", "design", "notes", "review", "roadmap"
 EXT = [".xlsx", ".docx", ".pdf", ".csv", ".pptx", ".py", ".json"]
 
 
+# page paths per site, so the proxy log shows *which page* was visited, not only the site
+PAGES = {
+    "github.com": ["/{org}/{repo}", "/{org}/{repo}/pull/{n}", "/{org}/{repo}/issues/{n}", "/{org}/{repo}/blob/main/{word}.py"],
+    "stackoverflow.com": ["/questions/{n}/{word}-{word2}-error"],
+    "pypi.org": ["/project/{repo}/"], "docker.io": ["/r/library/{repo}"], "atlassian.net": ["/browse/PRJ-{n}"],
+    "google.com": ["/search?q={word}+{word2}"], "office365.com": ["/mail/inbox", "/calendar/view/week",
+                                                                 "/sites/{team}/Shared%20Documents/{word}"],
+    "slack.com": ["/client/T0{n}/C0{n}"], "zoom.us": ["/j/{n}"], "salesforce.com": ["/lightning/r/Opportunity/{n}/view",
+                                                                                   "/lightning/o/Account/list"],
+    "linkedin.com": ["/feed/", "/in/{word}-{word2}", "/company/{org}"], "naukri.com": ["/{word}-jobs-in-bengaluru"],
+    "icicibank.com": ["/corporate/login", "/corporate/payments/{n}"], "tally.in": ["/support/{word}"],
+    "gst.gov.in": ["/returns/gstr-3b", "/services/{word}"], "microsoft.com": ["/en-us/security/{word}",
+                                                                              "/en-us/download/details.aspx?id={n}"],
+    "ubuntu.com": ["/security/notices/USN-{n}-1", "/server/docs/{word}"], "economictimes.com": ["/markets/{word}/{n}"],
+}
+PAGE_WORDS = ["pipeline", "invoice", "deploy", "budget", "login", "report", "pandas", "docker", "timeout",
+              "payroll", "forecast", "kubernetes", "sales", "review", "export", "python", "api", "quarterly"]
+DOWNLOADS = {"office365.com": [".pdf", ".xlsx", ".docx", ".pptx"], "salesforce.com": [".csv", ".pdf"],
+             "gst.gov.in": [".pdf"], "icicibank.com": [".pdf", ".csv"], "github.com": [".zip", ".tar.gz"],
+             "microsoft.com": [".msi", ".exe"], "ubuntu.com": [".iso"], "pypi.org": [".tar.gz"]}
+POLICY_BLOCKED = ["netflix.com", "hotstar.com", "bet365.com", "steampowered.com", "dream11.com", "twitch.tv"]
+
+
 def _ip_for(name: str, prefix: str = "103") -> str:
     h = zlib.crc32(name.encode())
     return f"{prefix}.{(h >> 16) & 255}.{(h >> 8) & 255}.{h & 255 or 1}"
@@ -132,6 +156,8 @@ class LogGenerator:
     def __init__(self, cfg: Config = CONFIG, n_users_scale: float = 1.0):
         self.cfg = cfg
         self.rng = np.random.default_rng(cfg.seed)
+        # web-page detail has its own random stream, so adding it leaves every other log line unchanged
+        self.web_rng = np.random.default_rng(cfg.seed + 1009)
         self.start = datetime.fromisoformat(cfg.start_date)
         self.s = Streams()
         self.scale = n_users_scale
@@ -234,12 +260,39 @@ class LogGenerator:
     def access(self, ts, u, resource, sens, action, success="success", device=None):
         self.s.access.append((ts, u.username, device or u.device, resource, action, sens, success))
 
-    def net(self, ts, u, domain, port, bytes_out, bytes_in, device=None, internal=False):
+    def page(self, domain: str, download: bool = False) -> str:
+        """A plausible page URL on ``domain`` (optionally a file download)."""
+        w = self.web_rng
+        pick = lambda xs: xs[int(w.integers(len(xs)))]  # noqa: E731
+        tpl = pick(PAGES.get(domain, ["/{word}/{n}"]))
+        path = tpl.format(org=pick(["acme-corp", "psf", "tiangolo", "apache"]), repo=pick(["api", "infra", "web",
+                          "etl", "requests", "fastapi"]), n=int(w.integers(1000, 99999)), word=pick(PAGE_WORDS),
+                          word2=pick(PAGE_WORDS), team=pick(["finance", "sales", "hr", "eng"]))
+        if download:
+            path = f"/download/{pick(PAGE_WORDS)}_{int(w.integers(1, 99)):02d}{pick(DOWNLOADS[domain])}"
+        return f"https://{domain}{path}"
+
+    def net(self, ts, u, domain, port, bytes_out, bytes_in, device=None, internal=False, url=None,
+            action="allowed"):
         dst_ip = _ip_for(domain, "10.20" if internal else "142")
         if internal:
             dst_ip = ".".join(dst_ip.split(".")[:4])
+        if url is None:
+            dl = not internal and domain in DOWNLOADS and self.web_rng.random() < 0.03
+            url = "" if internal or port not in (80, 443) else self.page(domain, dl)
         self.s.network.append((ts, u.username, device or u.device, u.ip, dst_ip, int(port),
-                               "tcp", int(bytes_out), int(bytes_in), domain))
+                               "tcp", int(bytes_out), int(bytes_in), domain, url,
+                               web.site_category(domain, url), action))
+
+    def web_noise(self, u: User, base: datetime, start: float, end: float):
+        """Everyday web-filter hits: now and then someone tries a streaming / betting / gaming site at
+        work and is blocked. Uses its own random stream (see ``web_rng``)."""
+        w = self.web_rng
+        if w.random() < 0.12:
+            dom = POLICY_BLOCKED[int(w.integers(len(POLICY_BLOCKED)))]
+            for _ in range(int(w.integers(1, 3))):
+                ts = base + timedelta(hours=float(w.uniform(start, max(start + 0.1, end))))
+                self.net(ts, u, dom, 443, 900, 0, url=f"https://{dom}/", action="blocked")
 
     def res(self, ts, device, user, cpu, mem, disk, procs):
         self.s.resource.append((ts, device, user, round(float(np.clip(cpu, 0, 100)), 1),
@@ -311,6 +364,7 @@ class LogGenerator:
         if self.rng.random() < 0.10:  # legit larger upload (e.g. deck to SharePoint)
             self.net(self.rand_time(base, start, end), u, "office365.com", 443,
                      self.rng.uniform(20e6, 80e6), 50_000)
+        self.web_noise(u, base, start, end)
 
         # --- resource usage (hourly on the laptop) ---
         h = start
@@ -499,6 +553,32 @@ class LogGenerator:
         self.truth(inc, "admin_account_abuse", u.username, "user", d, "T1136 Create Account / T1070 Indicator Removal",
                    "Admin login from Frankfurt at 03:05, new AD accounts created, security log cleared")
 
+    def atk_web_policy_evasion(self, inc, u, d):
+        """Insider is blocked from file-sharing sites, switches to a web proxy to get round the filter,
+        downloads hacking tools and pushes 1.2 GB out through the proxy. Added on top of a normal day."""
+        base = self.day(d) + timedelta(hours=u.work_start + 4.5)
+        for i, dom in enumerate(["anonfiles.io", "file.io", "transfer.sh", "anonfiles.io", "pastebin.com",
+                                 "file.io", "transfer.sh"]):
+            self.net(base + timedelta(minutes=2 * i), u, dom, 443, 1_200, 0, url=f"https://{dom}/upload",
+                     action="blocked")
+        self.net(base + timedelta(minutes=18), u, "croxyproxy.com", 443, 4_000, 90_000,
+                 url="https://www.croxyproxy.com/")
+        self.net(base + timedelta(minutes=21), u, "nmap.org", 443, 2_000, 31_000_000,
+                 url="https://nmap.org/dist/nmap-7.94-setup.exe")
+        self.net(base + timedelta(minutes=23), u, "gentilkiwi.com", 443, 2_000, 1_200_000,
+                 url="https://gentilkiwi.com/downloads/mimikatz_trunk.zip")
+        files = [f for f in self.cfg_files(u.dept) if f[1] != "public"][:15]
+        for i, (p_, s_) in enumerate(files):
+            self.access(base + timedelta(minutes=25, seconds=20 * i), u, p_, s_, "read")
+        for i in range(3):
+            self.net(base + timedelta(minutes=32 + 5 * i), u, "croxyproxy.com", 443, 400e6, 60_000,
+                     url="https://www.croxyproxy.com/browse.php?u=https%3A%2F%2Fanonfiles.io%2Fupload")
+        self.truth(inc, "web_policy_evasion", u.username, "user", d, "T1090 Proxy / T1105 Ingress Tool Transfer",
+                   "Blocked 7 times on file-sharing sites, switched to a web proxy, downloaded nmap and mimikatz, "
+                   "uploaded 1.2 GB through the proxy")
+        self.truth(inc, "web_policy_evasion", u.device, "device", d, "T1567 Exfiltration Over Web Service",
+                   "1.2 GB uploaded from this laptop to a web proxy never used before")
+
     # ------------------------------------------------------------------
     # Benign anomalies (NOT labelled) - realistic false-positive pressure
     # ------------------------------------------------------------------
@@ -584,6 +664,12 @@ class LogGenerator:
                     fn()
             for srv in ALL_SERVERS:
                 self.server_day(srv, d)
+        if cfg.n_days - T >= 28:
+            # web-filter evasion, layered on a normal day; victim chosen with the web stream so the rest
+            # of the company (and every earlier incident) is generated exactly as before
+            pool = [u for u in self.users if u.dept == "Finance" and u.username not in used]
+            u = pool[int(self.web_rng.integers(len(pool)))]
+            self.atk_web_policy_evasion("INC-12", u, T + 19)
         return self.to_frames()
 
     def to_frames(self) -> dict:
@@ -595,7 +681,7 @@ class LogGenerator:
                                                       "sensitivity", "status"]),
             "network": pd.DataFrame(s.network, columns=["timestamp", "user", "device", "src_ip", "dst_ip",
                                                         "dst_port", "protocol", "bytes_out", "bytes_in",
-                                                        "domain"]),
+                                                        "domain", "url", "category", "web_action"]),
             "resource": pd.DataFrame(s.resource, columns=["timestamp", "device", "user", "cpu_pct", "mem_pct",
                                                           "disk_io_mb", "process_count"]),
             "ground_truth": pd.DataFrame(s.truth, columns=["incident_id", "scenario", "entity", "entity_type",

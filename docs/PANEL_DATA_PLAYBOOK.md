@@ -12,7 +12,8 @@
    - **what it contains** - logins / file access / network / resource usage / staff list / labels;
    - **the column matches** - every field marked `*` must be matched; look at the *After mapping* preview.
 5. **Import** → **Analyse now**.
-6. Present: **Overview** → **Alerts → Cases** (open the top case, read the reasons aloud) → **Investigate** that
+6. Present: **Overview** → **Alerts → Cases** (open the top case, read the reasons aloud) → **What they did**
+   (the User activity page: pages, downloads, blocked attempts, files - flagged steps only) → **Investigate** that
    person → if they told you which days were attacks, upload them as **Labels** and show **Model performance**.
 
 ## What the system reads by itself
@@ -22,6 +23,7 @@
 | CSV / JSON / JSON-lines tables, any column names | log type and columns matched by name **and by content** (a column of URLs is the website, a column of IPs is an address) |
 | One file mixing logins, file access, web traffic... | split by its event-type column; you can change what each value means; logoff events are skipped |
 | Linux `auth.log`, `secure`, syslog text | sshd logins (accepted / failed), `sudo` / `su` (privilege use), `useradd` (account creation) |
+| Web proxy: Squid `access.log`, web-gateway CSV (URL, category, action) | every page, site category, allowed / blocked, downloaded files; blocked attempts, filter bypass through a proxy / VPN site and tool downloads are detected |
 | Windows Event Viewer CSV export, PowerShell `Export-Csv`, raw `.evtx` | logons 4624/4625, process starts 4688, file access 4663, account / group changes 4720/4728/4732, log cleared 1102 |
 | Only one kind of log | fine - the other features stay at zero |
 | No staff list / asset list | fine - everyone is one peer group; privilege use is judged against each account's own history |
@@ -42,19 +44,21 @@
 ## What it cannot do (say it before they ask)
 
 * Binary formats other than `.evtx` (e.g. packet captures) - convert to CSV / JSON first.
+* Pages of HTTPS sites are only visible if the proxy inspects TLS; otherwise only the site name is known.
 * Content inspection - only metadata is analysed, by design (privacy).
 * Per-event sequences - detection is per entity-day; gradual insiders are the known weak spot (CERT scenario 2).
 
 ## Practise
 
-`python docs/rehearsal/make_rehearsal.py` builds two practice packs with answer keys:
+`python docs/data/make_rehearsal.py` builds two practice packs with answer keys:
 
 * **corporate_siem_export.zip** - a different company; logins, file access and web traffic **mixed in one CSV**
   with unfamiliar column names, CPU as fractions with epoch timestamps, staff list as JSON.
   Correct two matches by hand in the logins part: *src_device ← Host*, *dest_host ← Target*.
-  Expected: all 11 attacks found (answer_key_A.csv).
-* **server_logs.zip** - a raw Linux `auth.log` and a Windows Event Viewer `Security.csv`.
-  Expected: 4 of 4 attacks found - SSH brute force, insider root + backdoor, password spray, account creation +
-  log clearing (answer_key_B.csv).
+  Expected: all 12 attacks found (answer_key_A.csv).
+* **server_logs.zip** - a raw Linux `auth.log`, a Windows Event Viewer `Security.csv` and a Squid proxy `access.log`.
+  Expected: 5 of 5 attacks found - SSH brute force, insider root + backdoor, password spray, account creation +
+  log clearing, and rhea getting round the web filter with a proxy site and downloading hacking tools
+  (answer_key_B.csv).
 
 Do each once, start to finish, before the viva.

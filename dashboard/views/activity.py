@@ -1,0 +1,242 @@
+"""User activity - what one person actually did on a day: pages, downloads, blocked attempts, files, logins.
+
+The behaviour models say *how unusual* a day was; this page shows *what happened*, with every action that
+is out of character for that person flagged (a site they never used, a blocked request, a hacking or
+anonymizer site, an executable download, a sensitive file opened for the first time, a large upload).
+"""
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+import streamlit as st
+
+from dashboard.ui import BLUE, ORANGE, Q, ctx, show, style, table_exists
+from ueba import web
+
+LARGE_UPLOAD_MB = 50
+
+
+def _usual(feats: pd.DataFrame, col: str) -> float:
+    return float(feats[col].median()) if col in feats and len(feats) else 0.0
+
+
+def _metric(c, label: str, today: float, usual: float, fmt: str = "{:,.0f}"):
+    hot = usual >= 0 and today >= max(3 * (usual + 1), usual + 3)
+    c.metric(label, fmt.format(today), f"usual {fmt.format(usual)}", delta_color="inverse" if hot else "off",
+             help="Today's value and this person's median day during the learning period")
+
+
+def _text(df: pd.DataFrame) -> pd.DataFrame:
+    """SQLite hands back mixed object columns (None, numbers); make every text column plain strings."""
+    df = df.copy()
+    for c in df.columns:
+        if not pd.api.types.is_numeric_dtype(df[c]):
+            df[c] = df[c].fillna("").astype(str).replace({"None": "", "nan": ""})
+    return df
+
+
+def _flags(df: pd.DataFrame, cond_labels: list[tuple[pd.Series, object]]) -> pd.Series:
+    out = pd.Series([""] * len(df), index=df.index, dtype=object)
+    for cond, label in cond_labels:
+        lab = label.astype(str) if isinstance(label, pd.Series) else pd.Series([label] * len(df), index=df.index)
+        hit = cond.fillna(False).astype(bool)
+        out = out.where(~hit, (out + ", " + lab).str.lstrip(", "))
+    return out
+
+
+def page_activity():
+    scores, alerts, meta = ctx.scores, ctx.alerts, ctx.meta
+    st.title("User activity")
+    st.caption("What a person actually did - pages visited, downloads, blocked attempts, files and logins - with "
+               "everything out of character for them flagged. Only metadata is shown, never page or file content.")
+    users = sorted(scores.loc[scores.entity_type == "user", "entity"].unique())
+    if not users:
+        st.info("No user activity in this workspace yet.")
+        return
+    default = st.session_state.get("entity")
+    if default not in users:
+        ua = alerts[alerts.entity_type == "user"] if len(alerts) else alerts
+        default = ua.sort_values("risk_score").iloc[-1]["entity"] if len(ua) else users[0]
+    c1, c2 = st.columns([2, 3])
+    user = c1.selectbox("Person", users, index=users.index(default))
+    S = scores[scores.entity == user].sort_values("date")
+    alert_days = set(alerts.loc[alerts.entity == user, "date"]) if len(alerts) else set()
+    days = S["date"].tolist()
+    pre = st.session_state.get("entity_date")
+    if pre not in days:
+        test = S[S.is_train == 0]
+        pre = test.sort_values("daily_risk").iloc[-1]["date"] if len(test) else days[-1]
+    risk = dict(zip(S["date"], S["daily_risk"]))
+    day = c2.selectbox("Day", days[::-1], index=days[::-1].index(pre),
+                       format_func=lambda d: f"{d} - risk {risk.get(d, 0):.0f}" + ("  (alert)" if d in alert_days else ""))
+    st.session_state["entity"], st.session_state["entity_date"] = user, day
+
+    feats = Q("SELECT * FROM features_user WHERE entity=?", (user,))
+    base = feats[(feats.date >= meta.get("train_start", "")) & (feats.date < meta.get("train_end", ""))]
+    today = feats[feats.date == day]
+    tv = (lambda col: float(today[col].iloc[0]) if len(today) and col in today else 0.0)
+
+    # ---------------------------------------------------------------- the day's data
+    net = Q("SELECT * FROM network WHERE user=? AND date=? ORDER BY timestamp", (user, day))
+    net = _text(web.enrich(net)) if len(net) else net
+    seen_sites = set(Q("SELECT DISTINCT domain FROM network WHERE user=? AND date<?", (user, day))["domain"])
+    acc = _text(Q("SELECT timestamp, device, resource, action, sensitivity, status FROM access WHERE user=? "
+                  "AND date=? ORDER BY timestamp", (user, day)))
+    seen_files = set(Q("SELECT DISTINCT resource FROM access WHERE user=? AND date<?", (user, day))["resource"])
+    au = Q("SELECT timestamp, auth_type, src_device, dest_host, src_ip, city, country, result FROM auth "
+           "WHERE user=? AND date=? ORDER BY timestamp", (user, day)) if table_exists("auth") else pd.DataFrame()
+    au = _text(au)
+
+    # ---------------------------------------------------------------- headline numbers
+    st.markdown(f"**{user} on {day}** - daily risk **{risk.get(day, 0):.0f}**"
+                + (" · raised an alert" if day in alert_days else ""))
+    m = st.columns(7)
+    _metric(m[0], "Pages visited", tv("pages_visited"), _usual(base, "pages_visited"))
+    _metric(m[1], "Sites", tv("distinct_domains"), _usual(base, "distinct_domains"))
+    _metric(m[2], "Downloads", tv("downloads"), _usual(base, "downloads"))
+    _metric(m[3], "Blocked attempts", tv("web_blocked"), _usual(base, "web_blocked"))
+    _metric(m[4], "Files opened", tv("access_events"), _usual(base, "access_events"))
+    _metric(m[5], "Sensitive files", tv("sensitive_access"), _usual(base, "sensitive_access"))
+    _metric(m[6], "MB uploaded", tv("bytes_out_mb"), _usual(base, "bytes_out_mb"), "{:,.1f}")
+
+    # ---------------------------------------------------------------- flagged tables
+    if len(net):
+        net["time"] = pd.to_datetime(net["timestamp"]).dt.strftime("%H:%M:%S")
+        net["page"] = net["url"].where(net["url"] != "", net["domain"])
+        net["MB down"] = (net["bytes_in"].astype(float) / 1e6).round(2)
+        net["MB up"] = (net["bytes_out"].astype(float) / 1e6).round(2)
+        net["flag"] = _net_flags(net, seen_sites)
+    if len(acc):
+        acc["time"] = pd.to_datetime(acc["timestamp"]).dt.strftime("%H:%M:%S")
+        new = ~acc["resource"].isin(seen_files) & ~acc.duplicated("resource")
+        acc["flag"] = _flags(acc, [
+            (new & acc["sensitivity"].isin(["confidential", "restricted"]), "first time, " + acc["sensitivity"]),
+            (new & ~acc["sensitivity"].isin(["confidential", "restricted"]), "first time"),
+            (acc["action"].isin(["priv_escalation", "copy_to_usb", "usb_connect"]),
+             acc["action"].replace({"priv_escalation": "privilege use", "copy_to_usb": "USB copy",
+                                    "usb_connect": "USB device"}))])
+    if len(au):
+        au["time"] = pd.to_datetime(au["timestamp"]).dt.strftime("%H:%M:%S")
+
+    tabs = st.tabs(["Story", "Web browsing", "Downloads", "Blocked attempts", "Files", "Logins"])
+    with tabs[0]:
+        _story(net, acc, au)
+    with tabs[1]:
+        if not len(net):
+            st.info("No web or network activity recorded for this day.")
+        else:
+            l, r = st.columns([3, 2])
+            with l:
+                only = st.toggle("Only flagged", key="web_only_flagged")
+                v = net[net["flag"] != ""] if only else net
+                st.dataframe(v[["time", "domain", "page", "category", "web_action", "MB down", "MB up", "flag"]]
+                             .rename(columns={"domain": "site", "web_action": "result"}),
+                             hide_index=True, height=420)
+            with r:
+                _category_chart(user, day, net, meta)
+    with tabs[2]:
+        dl = net[(net["file"] != "") & (net["web_action"] == "allowed")] if len(net) else net
+        if not len(dl):
+            st.info("No file downloads recorded for this day.")
+        else:
+            st.dataframe(dl[["time", "file", "domain", "category", "MB down", "flag"]]
+                         .rename(columns={"domain": "from site"}), hide_index=True)
+    with tabs[3]:
+        bl = net[net["web_action"] == "blocked"] if len(net) else net
+        if not len(bl):
+            st.info("Nothing was blocked for this person on this day.")
+        else:
+            st.markdown(f"**{len(bl)} blocked request(s) to {bl['domain'].nunique()} site(s)** - usually "
+                        f"{_usual(base, 'web_blocked'):.0f} a day.")
+            st.dataframe(bl[["time", "domain", "page", "category"]].rename(columns={"domain": "site"}),
+                         hide_index=True)
+    with tabs[4]:
+        if not len(acc):
+            st.info("No file or system access recorded for this day.")
+        else:
+            st.dataframe(acc[["time", "resource", "action", "sensitivity", "status", "device", "flag"]]
+                         .rename(columns={"resource": "file / command"}), hide_index=True, height=420)
+    with tabs[5]:
+        if not len(au):
+            st.info("No logins recorded for this day.")
+        else:
+            st.dataframe(au[["time", "auth_type", "src_device", "dest_host", "src_ip", "city", "country", "result"]]
+                         .rename(columns={"auth_type": "type", "src_device": "from device", "dest_host": "into"}),
+                         hide_index=True)
+
+
+def _net_flags(net: pd.DataFrame, seen_sites: set) -> pd.Series:
+    risky = web.is_risky(net["category"])
+    return _flags(net, [
+        (net["web_action"] == "blocked", "blocked"),
+        (~net["domain"].isin(seen_sites) & ~net.duplicated("domain"), "new site"),
+        (risky, net["category"] + " site"),
+        (web.is_executable(net["file"]) & (net["web_action"] == "allowed"), "executable"),
+        (net["MB up"] >= LARGE_UPLOAD_MB, "large upload")])
+
+
+def _story(net: pd.DataFrame, acc: pd.DataFrame, au: pd.DataFrame):
+    """One readable timeline. Routine repeats are folded so the unusual steps stand out."""
+    parts = []
+    if len(au):
+        parts.append(pd.DataFrame({"time": au["time"], "what": np.where(au["result"] == "success", "Logged in",
+                                                                         "Failed login"),
+                                   "detail": au["auth_type"] + " into " + au["dest_host"] + " from "
+                                   + au["src_ip"].astype(str) + np.where(au["city"].astype(str) != "",
+                                                                          " (" + au["city"].astype(str) + ")", ""),
+                                   "flag": np.where(au["result"] == "success", "", "failed")}))
+    if len(net):
+        what = np.select([net["web_action"] == "blocked", net["file"] != "", net["MB up"] >= LARGE_UPLOAD_MB],
+                         ["Blocked", "Downloaded", "Uploaded"], "Visited")
+        detail = np.where(net["file"] != "", net["file"] + " from " + net["domain"], net["page"])
+        detail = np.where(what == "Uploaded", net["MB up"].round(0).astype(int).astype(str) + " MB to " + net["domain"],
+                          detail)
+        parts.append(pd.DataFrame({"time": net["time"], "what": what, "detail": detail, "flag": net["flag"]}))
+    if len(acc):
+        verb = acc["action"].map({"read": "Opened", "write": "Edited", "delete": "Deleted", "execute": "Ran",
+                                  "priv_escalation": "Elevated", "copy_to_usb": "Copied to USB",
+                                  "usb_connect": "Connected USB"}).fillna(acc["action"])
+        parts.append(pd.DataFrame({"time": acc["time"], "what": verb, "detail": acc["resource"], "flag": acc["flag"]}))
+    if not parts:
+        st.info("No activity recorded for this day.")
+        return
+    ev = pd.concat(parts, ignore_index=True).sort_values("time", kind="stable").reset_index(drop=True)
+    only = st.toggle("Only flagged steps", value=len(ev) > 60, key="story_only_flagged")
+    if only:
+        ev = ev[ev["flag"] != ""]
+    # fold runs of the same routine action (e.g. 30 visits to office365.com) into one line
+    key = ev["what"] + "|" + ev["detail"].str.extract(r"^(?:https?://)?([^/ ]+)", expand=False).fillna(ev["detail"])
+    grp = (key != key.shift()).cumsum()
+    rows = []
+    for _, g in ev.groupby(grp, sort=False):
+        first = g.iloc[0]
+        n = len(g)
+        detail = first["detail"] if n == 1 else f"{first['detail']}  (+{n - 1} more like this until {g['time'].iloc[-1]})"
+        flags = ", ".join(sorted({f for x in g["flag"] for f in x.split(", ") if f}))
+        rows.append(dict(time=first["time"], what=first["what"], detail=detail, flag=flags))
+    out = pd.DataFrame(rows)
+    st.caption(f"{len(out)} steps" + (" (flagged only)" if only else "") + ". Flags mark what is out of character "
+               "for this person: a site or file never used before, a blocked request, a risky site, an executable "
+               "download, a sensitive file or a large upload.")
+    st.dataframe(out.style.apply(lambda r: ["background-color: rgba(235,104,52,.12)" if r["flag"] else ""] * len(r),
+                                 axis=1), hide_index=True, height=480, width="stretch")
+
+
+def _category_chart(user: str, day: str, net: pd.DataFrame, meta: dict):
+    hist = Q("SELECT category, domain, date FROM network WHERE user=? AND date>=? AND date<?",
+             (user, meta.get("train_start", ""), meta.get("train_end", "")))
+    if "category" not in hist or not len(hist):
+        hist = web.enrich(hist.assign(url="")) if len(hist) else pd.DataFrame(columns=["category", "date"])
+    n_days = max(1, hist["date"].nunique()) if len(hist) else 1
+    usual = hist.assign(category=hist["category"].replace("", "other")).groupby("category").size() / n_days
+    now = net.assign(category=net["category"].replace("", "other")).groupby("category").size()
+    cats = now.sort_values(ascending=False).index[:10][::-1]
+    fig = go.Figure()
+    fig.add_bar(y=list(cats), x=[usual.get(c, 0) for c in cats], orientation="h", name="usual / day",
+                marker_color=BLUE)
+    fig.add_bar(y=list(cats), x=[now.get(c, 0) for c in cats], orientation="h", name=day, marker_color=ORANGE)
+    fig.update_layout(title="Kinds of site: today vs usual", barmode="group", xaxis_title="requests")
+    show(style(fig, 420), key="activity_categories")
+    st.caption("Categories come from the web gateway when it provides them, otherwise from a built-in list of "
+               "well-known sites.")

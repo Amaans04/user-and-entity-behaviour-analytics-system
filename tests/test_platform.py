@@ -348,3 +348,61 @@ def test_password_spray_success_and_routine_admin_sudo():
                        dict(base, is_admin=False, department="x", priv_esc=3, baseline_priv=0)])   # first time
     _, hits = apply_rules(df, "user")
     assert [h["rule_id"] for h in hits[0]] == ["R17"] and hits[1] == [] and [h["rule_id"] for h in hits[2]] == ["R05"]
+
+
+def test_squid_proxy_log_and_gateway_csv_are_read():
+    from ueba import sources
+    log = (b"1781690400.000    20 10.0.0.5 TCP_MISS/200 50700 GET https://www.google.com/search?q=x rhea DIRECT/1.1.1.1 text/html\n"
+           b"1781690460.000    10 10.0.0.5 TCP_DENIED/403 3900 CONNECT anonfiles.io:443 rhea HIER_NONE/- text/html\n"
+           b"1781690520.000    30 10.0.0.5 TCP_MISS/200 31000000 GET https://nmap.org/dist/nmap-setup.exe rhea DIRECT/2.2.2.2 -\n")
+    (name, raw), = sources.read_bytes("access.log", log)
+    stream = sources.guess_stream(list(raw.columns), name, raw)
+    conv = sources.convert(stream, raw, sources.guess_mapping(stream, list(raw.columns), raw))
+    d = conv.df
+    assert stream == "network" and conv.ok
+    assert d["web_action"].tolist() == ["allowed", "blocked", "allowed"]
+    assert d["domain"].tolist() == ["www.google.com", "anonfiles.io", "nmap.org"]
+    assert d["category"].tolist() == ["search", "file-sharing", "hacking"]
+    # a commercial gateway export: full URL only, its own category names, "Blocked"/"Allowed"
+    gw = pd.DataFrame({"datetime": ["2026-06-01 10:00:00"] * 2, "login": ["ana", "bo"],
+                       "url": ["https://www.netflix.com/browse", "https://croxyproxy.com/"],
+                       "urlcategory": ["Streaming Media", "Proxy Avoidance"], "action": ["Blocked", "Allowed"],
+                       "requestsize": [500, 700], "responsesize": [0, 5000]})
+    st = sources.guess_stream(list(gw.columns), "gateway.csv", gw)
+    c = sources.convert(st, gw, sources.guess_mapping(st, list(gw.columns), gw))
+    assert st == "network" and c.ok and c.df["domain"].tolist() == ["www.netflix.com", "croxyproxy.com"]
+    assert c.df["category"].tolist() == ["streaming media", "anonymizer"] and c.df["web_action"].tolist() == ["blocked", "allowed"]
+
+
+def test_web_activity_features_and_rules():
+    from ueba import web
+    from ueba.detectors import apply_rules
+    from ueba.features import _web_parts
+    t = pd.Timestamp("2026-06-17 15:00")
+    rows = [dict(timestamp=t - pd.Timedelta(days=3), domain="github.com", url="https://github.com/a/b", web_action="allowed")]
+    rows += [dict(timestamp=t + pd.Timedelta(minutes=i), domain="file.io", url="https://file.io/upload",
+                  web_action="TCP_DENIED/403") for i in range(6)]
+    rows += [dict(timestamp=t + pd.Timedelta(minutes=15), domain="croxyproxy.com", url="https://croxyproxy.com/",
+                  web_action="allowed"),
+             dict(timestamp=t + pd.Timedelta(minutes=18), domain="nmap.org", url="https://nmap.org/dist/nmap.exe",
+                  web_action="allowed"),
+             dict(timestamp=t + pd.Timedelta(minutes=19), domain="github.com", url="https://github.com/x/releases/t.exe",
+                  web_action="allowed")]
+    net = pd.DataFrame(rows).assign(user="rhea", bytes_out=0, bytes_in=1000, dst_ip="1.1.1.1", dst_port=443)
+    net["date"] = net["timestamp"].dt.date.astype(str)
+    assert web.has_web_detail(web.enrich(net))
+    f = _web_parts(net)[0].set_index("date").loc["2026-06-17"]
+    assert (f.web_blocked, f.blocked_sites, f.block_bypass, f.executable_downloads, f.new_site_executables) == (6, 1, 1, 2, 1)
+    assert f.risky_site_visits == 2                                      # the proxy + the hacking site
+    from ueba.features import USER_FEATURES
+    zero = {c: 0 for c in USER_FEATURES + ["baseline_restricted"]}
+    df = pd.DataFrame([dict(zero, **f, baseline_blocked=0, baseline_risky=0, is_admin=False, department="x")])
+    _, hits = apply_rules(df, "user")
+    assert {"R18", "R19", "R20", "R21"} <= {h["rule_id"] for h in hits[0]}
+    # someone blocked a few times every day is not news
+    _, hits = apply_rules(df.assign(baseline_blocked=4, block_bypass=0, new_site_executables=0, risky_site_visits=0),
+                          "user")
+    assert hits[0] == []
+    # plain flow records (no pages, nothing blocked) keep the original feature set
+    flows = net.assign(url="", web_action="allowed")
+    assert not web.has_web_detail(web.enrich(flows))

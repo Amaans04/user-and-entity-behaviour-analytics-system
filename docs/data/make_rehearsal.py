@@ -1,6 +1,6 @@
 """Build rehearsal datasets that look like what an examiner might hand over on the spot.
 
-    python docs/rehearsal/make_rehearsal.py      # writes docs/rehearsal/*.zip and answer keys
+    python docs/data/make_rehearsal.py      # writes docs/data/*.zip and answer keys
 
 Pack A - "corporate_siem_export.zip" (a different simulated company, seed 2027):
     events.csv          logins, file access and web traffic MIXED in one table, told apart by an
@@ -13,6 +13,8 @@ Pack B - "server_logs.zip" (60 days, 25 people, written from scratch here):
     auth.log            raw Linux syslog of a bastion host: sshd logins, sudo, su, useradd
     Security.csv        Windows Event Viewer "Save All Events As" export of the domain controller
                         (4624 / 4625 logons, 4688 process starts, 4720 account created, 1102 log cleared)
+    access.log          Squid web-proxy log (SSL inspection on, so full page URLs are visible): pages,
+                        downloads and TCP_DENIED blocks for everyone
     -> answer_key_B.csv
 """
 from __future__ import annotations
@@ -173,6 +175,8 @@ def pack_b(seed: int = 11):
         "The audit log was cleared.\nSubject:\n\tSecurity ID:\tCORP\\yash\n\tAccount Name:\tyash\n")
     truth.append(("yash", str(d4.date()), "account created + audit log cleared"))
 
+    proxy = proxy_log(people, office, shift, start, truth, seed)
+
     syslog.sort()
     win.sort(key=lambda r: r[0])
     out = io.StringIO()
@@ -185,9 +189,71 @@ def pack_b(seed: int = 11):
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("auth.log", "\n".join(line for _, line in syslog) + "\n")
         z.writestr("Security.csv", out.getvalue())
+        z.writestr("access.log", "\n".join(proxy) + "\n")
     (OUT / "server_logs.zip").write_bytes(buf.getvalue())
     pd.DataFrame(truth, columns=["who", "when", "what"]).to_csv(OUT / "answer_key_B.csv", index=False)
-    print(f"pack B: {len(syslog):,} syslog lines, {len(win):,} Windows events, {len(truth)} incidents")
+    print(f"pack B: {len(syslog):,} syslog lines, {len(win):,} Windows events, {len(proxy):,} proxy requests, "
+          f"{len(truth)} incidents")
+
+
+SITES = {"https://outlook.office365.com/mail/inbox": 5, "https://teams.microsoft.com/v2/": 4,
+         "https://www.google.com/search?q={w}": 3, "https://stackoverflow.com/questions/{n}/{w}": 2,
+         "https://github.com/corp/{w}/pull/{n}": 2, "https://corp.atlassian.net/browse/OPS-{n}": 2,
+         "https://www.linkedin.com/feed/": 1, "https://economictimes.indiatimes.com/markets/{w}": 1,
+         "https://docs.python.org/3/library/{w}.html": 1, "https://www.icicibank.com/corporate/payments/{n}": 1}
+WORDS = ["deploy", "invoice", "timeout", "nginx", "payroll", "backup", "pandas", "docker", "budget", "report"]
+POLICY = ["www.netflix.com", "www.hotstar.com", "www.bet365.com", "store.steampowered.com", "www.twitch.tv"]
+
+
+def proxy_log(people, office, shift, start, truth, seed):
+    """Squid native access.log lines. A separate random stream, so the other files are unchanged."""
+    rng = random.Random(seed + 5)
+    rows = []
+    epoch = datetime(1970, 1, 1)
+
+    def line(ts, ip, code, size, method, url, user, peer, ctype):
+        rows.append((ts, f"{(ts - epoch).total_seconds():.3f} {rng.randint(20, 900):6d} {ip} {code} {size} {method} "
+                         f"{url} {user} {peer} {ctype}"))
+
+    urls, weights = list(SITES), list(SITES.values())
+    for d in range(60):
+        day = start + timedelta(days=d)
+        if day.weekday() >= 5:
+            continue
+        for p in people:
+            if rng.random() < 0.08:
+                continue
+            h0, h1 = shift[p]
+            for _ in range(rng.randint(25, 60)):
+                ts = day + timedelta(hours=rng.uniform(h0, h1))
+                url = rng.choices(urls, weights)[0].format(w=rng.choice(WORDS), n=rng.randint(1000, 99999))
+                line(ts, office[p], "TCP_MISS/200", rng.randint(2_000, 400_000), "GET", url, p,
+                     "DIRECT/142.250.1.1", "text/html")
+            if rng.random() < 0.04:                               # an occasional document download
+                ts = day + timedelta(hours=rng.uniform(h0, h1))
+                line(ts, office[p], "TCP_MISS/200", rng.randint(200_000, 4_000_000), "GET",
+                     f"https://outlook.office365.com/attachments/{rng.choice(WORDS)}_{rng.randint(1, 99)}.pdf", p,
+                     "DIRECT/52.96.1.1", "application/pdf")
+            if rng.random() < 0.10:                               # everyday web-filter hit
+                site = rng.choice(POLICY)
+                ts = day + timedelta(hours=rng.uniform(h0, h1))
+                line(ts, office[p], "TCP_DENIED/403", 3900, "GET", f"https://{site}/", p, "HIER_NONE/-", "text/html")
+
+    # ---- incident 5: blocked from file-sharing, gets round the filter with a web proxy, pulls hacking tools
+    d5 = start + timedelta(days=47, hours=15, minutes=10)
+    ip = office["rhea"]
+    for i, site in enumerate(["anonfiles.io", "file.io", "transfer.sh", "anonfiles.io", "pastebin.com", "file.io"]):
+        line(d5 + timedelta(minutes=2 * i), ip, "TCP_DENIED/403", 3900, "GET", f"https://{site}/upload", "rhea",
+             "HIER_NONE/-", "text/html")
+    line(d5 + timedelta(minutes=15), ip, "TCP_MISS/200", 88_000, "GET", "https://www.croxyproxy.com/", "rhea",
+         "DIRECT/104.21.3.3", "text/html")
+    line(d5 + timedelta(minutes=18), ip, "TCP_MISS/200", 31_000_000, "GET", "https://nmap.org/dist/nmap-7.94-setup.exe",
+         "rhea", "DIRECT/45.33.49.119", "application/octet-stream")
+    line(d5 + timedelta(minutes=20), ip, "TCP_MISS/200", 1_200_000, "GET",
+         "https://gentilkiwi.com/downloads/mimikatz_trunk.zip", "rhea", "DIRECT/51.15.4.4", "application/zip")
+    truth.append(("rhea", str(d5.date()), "blocked from file-sharing, web proxy to bypass, hacking tools downloaded"))
+    rows.sort()
+    return [r for _, r in rows]
 
 
 if __name__ == "__main__":

@@ -24,6 +24,8 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
+from . import web
+
 # field -> (required?, default for optional fields, synonyms)
 SCHEMA: dict[str, dict[str, tuple[bool, object, list[str]]]] = {
     "auth": {
@@ -63,9 +65,11 @@ SCHEMA: dict[str, dict[str, tuple[bool, object, list[str]]]] = {
     "network": {
         "timestamp": (True, None, ["time", "datetime", "eventtime", "ts", "@timestamp", "_time", "logtime",
                                    "date", "starttime"]),
-        "user": (True, None, ["username", "account", "csusername", "uid", "email", "actor"]),
+        "user": (True, None, ["username", "account", "csusername", "uid", "email", "actor", "login", "loginname",
+                              "userid", "principal"]),
         "bytes_out": (True, None, ["bytessent", "sentbytes", "outbytes", "csbytes", "origbytes", "upload",
-                                   "uploadbytes", "txbytes", "bytesout", "out"]),
+                                   "uploadbytes", "txbytes", "bytesout", "out", "requestsize", "reqsize",
+                                   "requestbytes", "clientbytes"]),
         "domain": (True, None, ["url", "target", "destination", "website", "site", "uri", "csuri", "cshost",
                                 "query", "destdomain", "sni", "servername", "destinationhost", "fqdn", "host",
                                 "hostname"]),
@@ -78,7 +82,15 @@ SCHEMA: dict[str, dict[str, tuple[bool, object, list[str]]]] = {
         "dst_port": (False, 0, ["destport", "destinationport", "dstport", "port", "respp", "serverport"]),
         "protocol": (False, "tcp", ["proto", "transport"]),
         "bytes_in": (False, 0, ["bytesreceived", "receivedbytes", "inbytes", "scbytes", "respbytes",
-                                "download", "downloadbytes", "rxbytes", "bytesin", "in"]),
+                                "download", "downloadbytes", "rxbytes", "bytesin", "in", "responsesize",
+                                "respsize", "responsebytes", "serverbytes"]),
+        # proxy / web-gateway detail (optional): which page, what kind of site, allowed or blocked
+        "url": (False, "", ["uri", "requesturl", "fullurl", "csuri", "urlpath", "request", "link", "page"]),
+        "category": (False, "", ["urlcategory", "webcategory", "sitecategory", "categoryname",
+                                 "contentcategory", "cat"]),
+        "web_action": (False, "allowed", ["action", "disposition", "verdict", "policyaction", "decision",
+                                          "filteraction", "proxyaction", "status", "result", "outcome",
+                                          "httpstatus", "statuscode"]),
     },
     "resource": {
         "timestamp": (True, None, ["time", "datetime", "ts", "@timestamp", "_time", "logtime", "date"]),
@@ -156,8 +168,8 @@ def read_bytes(name: str, data: bytes) -> list[tuple[str, pd.DataFrame]]:
     """Parse one uploaded file into (name, dataframe) pairs. ZIPs yield one pair per member.
 
     Besides tables (CSV / JSON / JSON-lines) this understands Linux auth.log / syslog text,
-    Windows Event Viewer CSV exports, PowerShell event exports and raw .evtx files
-    (see ``parsers.py``)."""
+    Windows Event Viewer CSV exports, PowerShell event exports, raw .evtx files and Squid proxy
+    access.log files (see ``parsers.py``)."""
     from . import parsers
     low = name.lower()
     if low.endswith(".zip"):
@@ -183,6 +195,8 @@ def read_bytes(name: str, data: bytes) -> list[tuple[str, pd.DataFrame]]:
     if low.endswith(".json") and text_head[:1] == b"[":
         return [(name, pd.json_normalize(json.loads(data)))]
     head_text = data[:8192].decode("utf-8-sig", errors="replace")
+    if not low.endswith((".csv", ".json")) and parsers.looks_like_squid(head_text):
+        return _named(name, parsers.parse_squid(data.decode("utf-8", errors="replace")), "Squid proxy log")
     if not low.endswith((".csv", ".json")) and parsers.looks_like_syslog(head_text):
         return _named(name, parsers.parse_syslog(data.decode("utf-8", errors="replace")), "Linux auth / syslog file")
     if parsers.looks_like_eventviewer_csv(head_text):
@@ -260,6 +274,8 @@ def guess_mapping(stream: str, columns: list[str], sample: pd.DataFrame | None =
             mapping[fld] = hit
             if hit:
                 used.add(hit)
+    if stream == "network" and mapping.get("url") and not mapping.get("domain"):
+        mapping["domain"] = mapping["url"]            # the site is taken from the full URL
     return mapping
 
 
@@ -373,8 +389,8 @@ def convert(stream: str, raw: pd.DataFrame, mapping: dict[str, str | None]) -> C
     fields = SCHEMA[stream]
     conv = Conversion(stream, pd.DataFrame(), len(raw))
     missing = [f for f, (req, _, _) in fields.items() if req and not mapping.get(f)]
-    if stream == "network" and "domain" in missing and mapping.get("dst_ip"):
-        missing.remove("domain")          # fall back to the destination IP as the "domain"
+    if stream == "network" and "domain" in missing and (mapping.get("url") or mapping.get("dst_ip")):
+        missing.remove("domain")          # fall back to the URL's site, or the destination IP
     if missing:
         conv.errors.append("Map the required field(s): " + ", ".join(missing))
         return conv
@@ -383,7 +399,7 @@ def convert(stream: str, raw: pd.DataFrame, mapping: dict[str, str | None]) -> C
         src = mapping.get(f)
         df[f] = raw[src] if src else default
     if stream == "network" and not mapping.get("domain"):
-        df["domain"] = df["dst_ip"]
+        df["domain"] = df["url"] if mapping.get("url") else df["dst_ip"]
 
     if "timestamp" in df:
         df["timestamp"] = _timestamps(df["timestamp"])
@@ -415,9 +431,12 @@ def convert(stream: str, raw: pd.DataFrame, mapping: dict[str, str | None]) -> C
         for c in ("bytes_out", "bytes_in", "dst_port"):
             df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).clip(lower=0).astype("int64")
         d = df["domain"].astype(str).str.strip().str.lower()
-        is_url = d.str.contains("://", regex=False)          # full URL -> host name
-        df["domain"] = np.where(is_url, d.str.replace(r"^[a-z]+://", "", regex=True)
+        is_url = d.str.contains("://", regex=False) | d.str.contains(r"^[^/\s]+\.[a-z]{2,}/", regex=True)
+        if not mapping.get("url"):                           # keep the page when the site column holds URLs
+            df["url"] = np.where(is_url, df["domain"].astype(str).str.strip(), "")
+        df["domain"] = np.where(is_url, d.str.replace(r"^[a-z]+://", "", regex=True)   # full URL -> host name
                                 .str.split("/").str[0].str.split(":").str[0], d)
+        df = web.enrich(df.drop(columns=["file"], errors="ignore"))
     if stream == "resource":
         for c in ("cpu_pct", "mem_pct", "disk_io_mb", "process_count"):
             df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)

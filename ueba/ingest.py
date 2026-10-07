@@ -12,7 +12,10 @@ import json
 import sqlite3
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
+
+from . import web
 
 REQUIRED = {
     "auth": ["timestamp", "user", "src_device", "src_ip", "dest_host", "auth_type", "result",
@@ -59,6 +62,7 @@ def normalise(name: str, df: pd.DataFrame) -> pd.DataFrame:
     if name == "network":
         for c in ("bytes_out", "bytes_in", "dst_port"):
             df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype("int64")
+        df = web.enrich(df)                  # page, site category, allowed/blocked, downloaded file
     if name == "resource":
         for c in ("cpu_pct", "mem_pct", "disk_io_mb", "process_count"):
             df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
@@ -115,12 +119,18 @@ def unified_events(frames: dict) -> pd.DataFrame:
         "timestamp": x["timestamp"], "source": "access", "user": x["user"], "device": x["device"],
         "action": x["action"], "target": x["resource"], "outcome": x["status"],
         "detail": "sensitivity=" + x["sensitivity"].astype(str)})
-    n = frames["network"]
+    n = web.enrich(frames["network"])
+    url, cat, fil = (n[c].astype(str) for c in ("url", "category", "file"))
+    kind = pd.Series(np.select([n["web_action"] == "blocked", fil != "", url != ""],
+                               ["web:blocked", "web:download", "web:visit"], ""), index=n.index, dtype=object)
+    kind = kind.where(kind != "", "connect:" + n["dst_port"].astype(str))
+    detail = (("category=" + cat + " ").where(cat != "", "") + ("file=" + fil + " ").where(fil != "", "")
+              + "out=" + (n["bytes_out"] / 1e6).round(2).astype(str) + "MB in="
+              + (n["bytes_in"] / 1e6).round(2).astype(str) + "MB")
     net = pd.DataFrame({
         "timestamp": n["timestamp"], "source": "network", "user": n["user"], "device": n["device"],
-        "action": "connect:" + n["dst_port"].astype(str), "target": n["domain"], "outcome": "ok",
-        "detail": "out=" + (n["bytes_out"] / 1e6).round(2).astype(str) + "MB in="
-                  + (n["bytes_in"] / 1e6).round(2).astype(str) + "MB"})
+        "action": kind, "target": url.where(url != "", n["domain"].astype(str)), "outcome": n["web_action"],
+        "detail": detail})
     r = frames["resource"]
     res = pd.DataFrame({
         "timestamp": r["timestamp"], "source": "resource", "user": r["user"], "device": r["device"],

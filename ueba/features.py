@@ -14,6 +14,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from . import web
 from .config import CONFIG, Config
 
 CLOUD_STORAGE = ("mega.nz", "dropbox.com", "wetransfer.com", "transfer.sh", "anonfiles.io",
@@ -40,6 +41,14 @@ USER_FEATURES = [
     # resource usage (user's own laptop)
     "cpu_mean", "cpu_max", "cpu_high_hours", "mem_mean", "disk_io_mb", "active_hours",
 ]
+# web activity - only modelled when the logs carry page / category / allow-block detail (a proxy or
+# web gateway); plain flow records leave these at zero and the models use USER_FEATURES alone
+WEB_FEATURES = [
+    "pages_visited", "web_blocked", "blocked_sites", "risky_site_visits", "new_categories",
+    "downloads", "executable_downloads",
+]
+# rule-only web signals (not modelled; read by the threat rules)
+WEB_RULE_SIGNALS = ["block_bypass", "new_site_executables"]
 DEVICE_FEATURES = [
     "logins_to_device", "failed_logins_to_device", "distinct_users_on_device", "new_users_on_device",
     "connections", "bytes_out_mb", "max_upload_mb", "new_domains", "new_domain_upload_mb",
@@ -181,6 +190,7 @@ def user_features(frames: dict, cfg: Config = CONFIG) -> pd.DataFrame:
 
     # ---- network ----
     parts += _network_parts(net, "user")
+    parts += _web_parts(net)
 
     # ---- resource usage (the user's own laptop samples) ----
     r = res[res["user"] != "system"].copy()
@@ -189,7 +199,7 @@ def user_features(frames: dict, cfg: Config = CONFIG) -> pd.DataFrame:
                                       cpu_high_hours=("high", "sum"), mem_mean=("mem_pct", "mean"),
                                       disk_io_mb=("disk_io_mb", "sum"), active_hours=("cpu_pct", "size"))))
 
-    out = _merge(parts, "user", USER_FEATURES)
+    out = _merge(parts, "user", USER_FEATURES + WEB_FEATURES + WEB_RULE_SIGNALS)
     # rule-only signal (kept out of USER_FEATURES so the ML models and baselines are unchanged):
     # successful logins from a source that failed against several different accounts within the
     # hour - a password spray that worked (one attacker spread thin over many accounts is
@@ -249,6 +259,43 @@ def _network_parts(net: pd.DataFrame, key: str) -> list:
         internal_hosts=("int_host", "nunique")))]
     parts.append(count_new(n, key, "domain", "new_domains"))
     parts.append(count_new(n, key, "dst_port", "new_ports"))
+    return parts
+
+
+BYPASS_WINDOW = pd.Timedelta(minutes=60)
+
+
+def _web_parts(net: pd.DataFrame) -> list:
+    """What the user did on the web: pages, blocked attempts, risky sites, downloads.
+
+    * ``new_categories``      - kinds of site this user never visited before (causal, like new_domains)
+    * ``block_bypass``        - an anonymizer / proxy / VPN site reached within an hour of being blocked:
+                                the classic way round a web filter
+    * ``new_site_executables`` - an executable or script downloaded from a site the user never used before
+    """
+    n = web.enrich(net)
+    if n.empty:
+        return []
+    n = n.sort_values("timestamp")
+    n["blocked"] = (n["web_action"] == "blocked").astype(int)
+    n["risky"] = web.is_risky(n["category"]).astype(int)
+    ok = n["blocked"] == 0
+    n["page"] = np.where((n["url"] != "") & ok, n["url"], None)
+    n["dl"] = ((n["file"] != "") & ok).astype(int)
+    n["exe"] = (web.is_executable(n["file"]) & ok).astype(int)
+    n["blocked_dom"] = np.where(n["blocked"] == 1, n["domain"], None)
+    first_dom = first_seen_flags(n, "user", "domain")
+    n["new_exe"] = (n["exe"].astype(bool) & first_dom).astype(int)
+    # allowed anonymizer visit shortly after a blocked request (per user, time-ordered)
+    last_block = n["timestamp"].where(n["blocked"] == 1).groupby(n["user"]).ffill()
+    n["bypass"] = (ok & (n["category"] == "anonymizer") & last_block.notna()
+                   & ((n["timestamp"] - last_block) <= BYPASS_WINDOW)).astype(int)
+    parts = [_agg(n, "user", dict(
+        pages_visited=("page", "nunique"), web_blocked=("blocked", "sum"), blocked_sites=("blocked_dom", "nunique"),
+        risky_site_visits=("risky", "sum"), downloads=("dl", "sum"), executable_downloads=("exe", "sum"),
+        block_bypass=("bypass", "sum"), new_site_executables=("new_exe", "sum")))]
+    cat = n[n["category"] != ""]
+    parts.append(count_new(cat, "user", "category", "new_categories"))
     return parts
 
 

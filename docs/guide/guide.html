@@ -109,7 +109,7 @@
   </table>
   <div class="callout"><b>The one-sentence pitch.</b> Stolen passwords and insiders look legitimate to signature tools; this
     system learns each person's and machine's normal behaviour, needs no attack labels, raises few alerts that explain
-    themselves, and was tested honestly - on a simulated company it caught 11/11 attacks, and on the independent CERT
+    themselves, and was tested honestly - on a simulated company it caught 12/12 attacks, and on the independent CERT
     benchmark it found 22 of 36 held-out insiders after one generic addition.</div>
 </div>
 
@@ -126,25 +126,25 @@
     new site. The catch: behaviour-based tools drown analysts in false alarms and don't explain themselves.</p>
   <h2>What the system does</h2>
   <ul>
-    <li><b>Captures</b> authentication, system-access, network and resource-usage logs - by upload, drop folder,
+    <li><b>Captures</b> authentication, system-access, network / web-proxy and resource-usage logs - by upload, drop folder,
       authenticated API or an endpoint agent.</li>
-    <li><b>Profiles</b> 44 features per user-day and 19 per device-day against each entity's own history and its
+    <li><b>Profiles</b> 44 features per user-day (+7 for web activity) and 19 per device-day against each entity's own history and its
       department, adapting over time but never learning suspicious days.</li>
     <li><b>Detects</b> deviations with three independent layers - robust statistics, an unsupervised ML ensemble
-      (Isolation Forest, LOF, autoencoder) and 22 MITRE ATT&amp;CK rules - fused into one 0-100 risk score that needs
+      (Isolation Forest, LOF, autoencoder) and 26 MITRE ATT&amp;CK rules - fused into one 0-100 risk score that needs
       corroboration before it alerts.</li>
     <li><b>Operates</b> continuously: a collector service scores only new data with saved models (identical to a full
       re-run), notifies analysts, groups alerts into cases, and the console is protected by roles and an audit trail.</li>
   </ul>
   <h2>Headline results</h2>
   <div class="kpis">
-    <div class="kpi"><b>11 / 11</b><span>simulated attacks caught, each on day one</span></div>
-    <div class="kpi"><b>0.964</b><span>precision = recall = F1 (simulated)</span></div>
+    <div class="kpi"><b>12 / 12</b><span>simulated attacks caught, each on day one</span></div>
+    <div class="kpi"><b>0.951</b><span>F1 (precision 0.935, recall 0.967; simulated)</span></div>
     <div class="kpi"><b>~1 / day</b><span>alerts for 108 monitored entities</span></div>
     <div class="kpi"><b>22 / 36</b><span>held-out CERT insiders (3 / 36 out of the box)</span></div>
   </div>
   <div class="callout warn"><b>Be upfront about this.</b> The simulated company was designed together with the detector,
-    so 0.964 is an upper bound. On CERT r4.2, which I did not design, the out-of-the-box system found only 3 of 36 held-out
+    so 0.951 is an upper bound. On CERT r4.2, which I did not design, the out-of-the-box system found only 3 of 36 held-out
     insiders; one generic indicator raised it to 22 of 36, and gradual job-seeker theft is still mostly missed. Saying this
     first is a strength in a viva, not a weakness.</div>
 </div>
@@ -211,7 +211,8 @@
   <div class="group">A · Data in</div>
   <div class="feature"><h3>Four log streams <span class="where">ueba/ingest.py</span></h3><dl>
     <dt>What</dt><dd>Authentication (logins, method, source IP, location), system access (files, commands, sensitivity),
-      network (domains, ports, bytes), resource usage (CPU, memory, disk).</dd>
+      network and web proxy (domains, ports, bytes; with a proxy also the page, site category, allowed / blocked and
+      downloaded file), resource usage (CPU, memory, disk).</dd>
     <dt class="why">Why</dt><dd>The problem statement asks for them, and attacks show up in different places: brute force
       in auth, theft in access and network, cryptomining in resource use.</dd>
     <dt>How</dt><dd>Validated, normalised to one schema and merged into one event timeline; missing streams are allowed.</dd></dl></div>
@@ -260,10 +261,20 @@
       as benign always are.</dd></dl></div>
   <div class="feature"><h3>Three detection layers <span class="where">ueba/detectors.py</span></h3><dl>
     <dt>What</dt><dd>Statistics (largest z-scores above 3), an unsupervised ML ensemble (Isolation Forest, LOF, autoencoder)
-      trained on normal days only, and 22 rules mapped to ATT&amp;CK.</dd>
+      trained on normal days only, and 26 rules mapped to ATT&amp;CK.</dd>
     <dt class="why">Why</dt><dd>They fail differently: statistics explain, ML finds patterns nobody wrote a rule for, rules are
       precise for known techniques. No labels are needed - real organisations don't have them.</dd>
     <dt>How</dt><dd>Each ML score is calibrated so 1.0 = the 99th percentile of normal, then averaged.</dd></dl></div>
+  <div class="feature"><h3>Web activity: what the user did online <span class="where">ueba/web.py · features.py · detectors.py</span></h3><dl>
+    <dt>What</dt><dd>From proxy logs (Squid, web-gateway CSV): pages visited, blocked requests and blocked sites, visits to
+      hacking / anonymizer / malware sites, kinds of site never visited before, downloads and executable downloads - 7 more
+      features per user-day - plus 4 rules: a burst of blocks vs the person's usual rate, a proxy / VPN site within an hour of
+      a block (filter bypass, T1090), an executable from a never-visited site (T1105), first visits to hacking sites (T1588.002).</dd>
+    <dt class="why">Why</dt><dd>The review asked what a person actually did, not only how much data moved. Being blocked,
+      getting round the filter and fetching tools are early signs that byte counts miss.</dd>
+    <dt>How</dt><dd>The site's category comes from the gateway or a built-in list; "blocked" from TCP_DENIED / 403 / deny;
+      the file from the URL. The features join the models only when the logs carry this detail, so flow-only data (CERT)
+      is scored exactly as before. Profiling it raised the ML ensemble alone from F1 0.79 to 0.86.</dd></dl></div>
   <div class="feature"><h3>Rule R16 - removable media without history <span class="where">ueba/detectors.py</span></h3><dl>
     <dt>What</dt><dd>USB use by an account that never used removable media in its learning period (T1052.001).</dd>
     <dt class="why">Why</dt><dd>Added after CERT showed quiet insiders slip through; a standard insider indicator. Chosen on a
@@ -272,7 +283,7 @@
     <dt>What</dt><dd>A = 1 - (1-0.28·stat)(1-0.10·peer)(1-0.30·ml)(1-rules); daily risk = 100·min(1, A·criticality).</dd>
     <dt class="why">Why</dt><dd>One number to rank by, weighted by impact (admins, servers ×1.3). The threshold 45 is above
       what statistics alone can reach (43.8), so <b>an alert always needs ML or a rule to agree</b> - this raised precision
-      from 0.31 to 0.96.</dd>
+      from 0.31 to above 0.9.</dd>
     <dt>How</dt><dd>Behaves like a probabilistic OR: one strong signal or several weak ones raise risk; never above 100.</dd></dl></div>
   <div class="feature"><h3>Accumulated risk <span class="where">ueba/risk.py</span></h3><dl>
     <dt>What</dt><dd>entity risk(t) = entity risk(t-1)·0.5^(days/3) + max(0, daily risk - 15); a "sustained risk" alert at 60.</dd>
@@ -316,6 +327,12 @@
     <dt class="why">Why</dt><dd>Known patterns (a night-shift backup admin) cause alert fatigue; on CERT one habit produced
       91 alerts for one user.</dd>
     <dt>How</dt><dd>Suppressed alerts are still computed and kept, hidden and never notified; audited; can be lifted.</dd></dl></div>
+  <div class="feature"><h3>User activity page <span class="where">dashboard/views/activity.py</span></h3><dl>
+    <dt>What</dt><dd>For any person and day: one story of logins, pages, downloads, blocked attempts and files, routine
+      repeats folded, and every step that is new or risky for that person flagged; tabs per kind; today vs usual numbers
+      and kinds of site.</dd>
+    <dt class="why">Why</dt><dd>A risk score says how unusual a day was; an analyst (and a panel) needs to see what happened.
+      Opened from any alert with "What they did".</dd></dl></div>
   <div class="feature"><h3>Investigation, performance and log pages <span class="where">dashboard/views/</span></h3><dl>
     <dt>What</dt><dd>Entity page (learned baseline, risk timeline, biggest deviations, event timeline); model performance
       with a what-if threshold; per-workspace alert threshold; log explorer with CSV export; live refresh.</dd>
@@ -343,7 +360,7 @@
 <div class="section">
   <div class="kicker">Section 5</div>
   <h1>Dashboard tour</h1>
-  <p class="lede">Eight pages, ordered the way an analyst works. Each workspace shows its status and the collector
+  <p class="lede">Nine pages, ordered the way an analyst works. Each workspace shows its status and the collector
     service's health in the sidebar.</p>
   <figure class="shot"><img src="../../report/screens/01_overview.png" alt="Overview">
     <figcaption>Overview - events, entities, alerts, open cases, alerts per day (weekly for long periods), riskiest entities,
@@ -354,6 +371,9 @@
   <figure class="shot"><img src="../../report/screens/03_entity.png" alt="Investigate">
     <figcaption>Investigate entity - learned baseline (hours, countries, hosts, volumes), risk over time with alerts and the
       labelled attack days, then a drill-down into any day.</figcaption></figure>
+  <figure class="shot"><img src="../../report/screens/05_activity.png" alt="User activity">
+    <figcaption>User activity - the web-filter evasion as a flagged story: seven blocks, a proxy site, nmap and mimikatz
+      downloads, first-time finance files, then 1.2 GB uploaded through the proxy.</figcaption></figure>
   <figure class="shot"><img src="../../report/screens/04_collection.png" alt="Data sources">
     <figcaption>Data sources → Automatic collection - service status, the drop folder, the ingest API, the agent and replay
       commands; notifications and settings below.</figcaption></figure>
@@ -370,22 +390,22 @@
 <div class="section">
   <div class="kicker">Section 6</div>
   <h1>Results</h1>
-  <h2>Simulated organisation (48 people, 12 servers, 60 days, 11 attacks)</h2>
+  <h2>Simulated organisation (48 people, 12 servers, 60 days, 12 attacks)</h2>
   <table class="tight">
     <tr><th>Measure</th><th class="n">Value</th></tr>
-    <tr><td>Incidents detected</td><td class="n">11 / 11, each on the first day</td></tr>
-    <tr><td>Precision / recall / F1</td><td class="n">0.964 / 0.964 / 0.964 (TP 27, FP 1, FN 1)</td></tr>
+    <tr><td>Incidents detected</td><td class="n">12 / 12, each on the first day</td></tr>
+    <tr><td>Precision / recall / F1</td><td class="n">0.935 / 0.967 / 0.951 (TP 29, FP 2, FN 1)</td></tr>
     <tr><td>False positive rate · alerts per day</td><td class="n">0.04 % · about 0.9</td></tr>
-    <tr><td>Five different organisations (mean F1)</td><td class="n">0.951, 55 / 55 incidents</td></tr>
-    <tr><td>Behavioural layers only, no rules (F1)</td><td class="n">0.857</td></tr>
+    <tr><td>Five different organisations (mean F1)</td><td class="n">0.945, 60 / 60 incidents</td></tr>
+    <tr><td>Behavioural layers only, no rules (F1)</td><td class="n">0.854</td></tr>
   </table>
   <p>The one false positive is a planted harmless oddity (a new project, risk 49); the one false negative is the pivot
-    laptop of the lateral movement (43.6, just below 45). Rules alone score F1 0.982 only because they were written for these
-    attack types - the behavioural layers reach 0.857 without knowing the attacks.</p>
+    laptop of the lateral movement (43.6, just below 45). Rules alone score F1 0.983 only because they were written for these
+    attack types - the behavioural layers reach 0.854 without knowing the attacks.</p>
   <h2>Live operation</h2>
   <p>Incremental updates gave <b>identical</b> scores and alerts to a full re-run (cut at a day boundary and mid-day).
-    Replaying the company through the API: 2 trainings + 29 incremental updates of 1.6-3.2 s, no errors, 11/11 incidents and
-    F1 0.964 - the same as the batch run.</p>
+    Replaying the company as a live feed (8-hour slices): 1 training + 89 incremental updates of 1.8-5.7 s (median 2.6), no errors, 12/12 incidents and
+    F1 0.951 - the same as the batch run.</p>
   <h2>CERT r4.2 (1,000 users, 70 insiders, 17 months) - held-out half</h2>
   <table class="tight">
     <tr><th>Measure</th><th class="n">Out of the box</th><th class="n">With R16</th></tr>
@@ -415,13 +435,13 @@ python -m ueba.replay --workspace live-demo --labels      # stream the company l
 python -m ueba.agent --url http://127.0.0.1:8600 --workspace lab --token ueba_...
 python run_pipeline.py --cert data/cert/r4.2              # CERT benchmark into its own workspace (~8 min)
 python experiments.py · experiments_cert.py · experiments_trend.py   # robustness / CERT / trend experiments
-python -m pytest -q                    # 32 tests</pre>
+python -m pytest -q                    # 34 tests</pre>
   <table>
     <tr><th style="width:30%">File</th><th>Responsibility</th></tr>
     <tr><td><code>ueba/generator.py</code></td><td>Simulated company, planted attacks, ground truth</td></tr>
     <tr><td><code>ueba/sources.py · ingest.py</code></td><td>Log-type detection, column mapping, normalisation, storage</td></tr>
     <tr><td><code>ueba/features.py · profiles.py</code></td><td>Behavioural features; personal and peer baselines</td></tr>
-    <tr><td><code>ueba/detectors.py · risk.py</code></td><td>Statistics, ML ensemble, 22 rules, explanations; risk fusion, alerts</td></tr>
+    <tr><td><code>ueba/detectors.py · risk.py</code></td><td>Statistics, ML ensemble, 26 rules, explanations; risk fusion, alerts</td></tr>
     <tr><td><code>ueba/pipeline.py</code></td><td>Full training run or incremental update; adaptive baseline with quarantine</td></tr>
     <tr><td><code>ueba/workspace.py</code></td><td>Workspaces, inbox, locking, learning → monitoring lifecycle</td></tr>
     <tr><td><code>ueba/service.py · api.py · agent.py · replay.py</code></td><td>Collector service; ingest API; endpoint agent; live replay</td></tr>
@@ -429,7 +449,7 @@ python -m pytest -q                    # 32 tests</pre>
     <tr><td><code>ueba/auth.py</code></td><td>Users, roles, password hashing, API tokens, audit log</td></tr>
     <tr><td><code>ueba/cert_loader.py · evaluate.py</code></td><td>CERT adapter; metrics, figures, reports</td></tr>
     <tr><td><code>dashboard/app.py · ui.py · views/</code></td><td>Console shell; per-session context; one module per page</td></tr>
-    <tr><td><code>tests/</code></td><td>32 tests: detection, ingestion, incremental equivalence, API, security, cases, service</td></tr>
+    <tr><td><code>tests/</code></td><td>34 tests: detection, ingestion, web activity, incremental equivalence, API, security, cases, service</td></tr>
   </table>
 </div>
 
@@ -444,11 +464,13 @@ python -m pytest -q                    # 32 tests</pre>
     <tr><th class="n" style="width:9%">Time</th><th style="width:30%">Show</th><th>Say</th></tr>
     <tr><td class="n">0:00</td><td>Sign-in screen</td><td>"A security tool must be secure itself - roles, hashed passwords,
       lock-out, and everything is audited."</td></tr>
-    <tr><td class="n">0:30</td><td>Demo → Overview</td><td>"A simulated 48-person company, 205k events, 11 attacks and 4
-      harmless oddities. All 11 caught on day one, one false alert in 30 days."</td></tr>
+    <tr><td class="n">0:30</td><td>Demo → Overview</td><td>"A simulated 48-person company, 206k events, 12 attacks and 4
+      harmless oddities. All 12 caught on day one, two false alerts in 30 days."</td></tr>
     <tr><td class="n">1:15</td><td>Alerts → Cases → sana.pillai</td><td>"Five daily alerts of a slow insider are one case.
       Every alert explains itself, and statistics alone can never alert - ML or a rule must agree."</td></tr>
     <tr><td class="n">2:00</td><td>Investigate →</td><td>"Her learned baseline, the risk timeline, and exactly what deviated."</td></tr>
+    <tr><td class="n">2:15</td><td>Alerts → nisha.menon → What they did</td><td>"And this is what a person actually did: blocked
+      seven times on file-sharing sites, switched to a web proxy, downloaded nmap and mimikatz, then sent 1.2 GB out."</td></tr>
     <tr><td class="n">2:30</td><td>Start the replay; open Viva live</td><td>"Now as a live system - history arrives, it learns,
       then a day every 8 seconds. Nobody clicks anything."</td></tr>
     <tr><td class="n">3:30</td><td>INC-01 appears; phone buzzes</td><td>"Brute force from Tor - detected and notified within
@@ -471,12 +493,12 @@ python -m pytest -q                    # 32 tests</pre>
       next attack is not like the last one. The models learn only normal behaviour; labels are used only to measure.</div>
     <div class="qa"><b>Your results come from data you generated - isn't that circular?</b>Yes, it's the main limitation.
       That's why I ran CERT, which CMU built: 3/36 out of the box, 22/36 with one generic indicator chosen on a separate half.
-      The synthetic 0.964 is an upper bound.</div>
+      The synthetic 0.951 is an upper bound.</div>
     <div class="qa"><b>Isn't adding R16 after seeing CERT tuning on the test set?</b>I split the users first, chose R16 on the
       development half (4 → 17) and quote the untouched test half (3 → 22). It's a standard indicator and never fires on
       the synthetic data. The out-of-the-box number is reported as the generalisation result.</div>
     <div class="qa"><b>Rules alone score 0.98 - why the ML?</b>Because I wrote those rules for the attacks I also simulated.
-      Without rules the behavioural layers still reach F1 0.857 with no knowledge of the attacks.</div>
+      Without rules the behavioural layers still reach F1 0.854 with no knowledge of the attacks.</div>
     <div class="qa"><b>Can an attacker poison the baseline?</b>Risky days (≥ 60), rule hits and confirmed threats are never
       learned; the ML models are trained once on the learning period.</div>
   </div>
@@ -500,11 +522,12 @@ python -m pytest -q                    # 32 tests</pre>
     <li>Quiet, gradual insiders (CERT scenario 2) are mostly missed; the behavioural layers ignore small deviations.</li>
     <li>Synthetic results are an upper bound; real logs are messier.</li>
     <li>Daily granularity: alerts within seconds of data arriving, but no intra-day sequence detection.</li>
-    <li>The agent can't measure bytes per connection; upload volumes should come from proxy / firewall logs.</li>
+    <li>The agent can't measure bytes per connection; upload volumes and pages come from proxy / firewall logs, and HTTPS pages
+      are visible only where the proxy inspects TLS.</li>
   </ul>
-  <div class="callout ok"><b>Cheat sheet.</b> 205,483 events · 108 entities · 44 + 19 features · 3 layers · 22 rules ·
-    threshold 45 (stats max 43.8) · precision 0.964 · F1 0.951 over 5 seeds · 0.857 without rules · CERT 3 → 22 of 36 ·
-    ~1 alert/day · update 2-3 s · 32 tests.</div>
+  <div class="callout ok"><b>Cheat sheet.</b> 205,881 events · 108 entities · 44 (+7 web) + 19 features · 3 layers · 26 rules ·
+    threshold 45 (stats max 43.8) · F1 0.951 (P 0.935) · F1 0.945 over 5 seeds · 0.854 without rules · CERT 3 → 22 of 36 ·
+    ~1 alert/day · update ~2.6 s · 34 tests.</div>
 </div>
 
 </body>

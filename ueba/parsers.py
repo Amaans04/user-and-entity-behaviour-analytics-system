@@ -350,3 +350,44 @@ def parse_evtx(data: bytes) -> dict[str, pd.DataFrame]:
                 fields = {d.get("Name"): (d.text or "") for d in root.findall("e:EventData/e:Data", ns) if d.get("Name")}
                 events.append((eid, ts.tz_localize(None), comp.text if comp is not None else "windows-host", fields))
     return _collect(events)
+
+
+# --------------------------------------------------------------------------
+# Web proxy: Squid native access.log
+# --------------------------------------------------------------------------
+# time elapsed client code/status bytes method URL user hierarchy/peer type
+_SQUID = re.compile(r"^(?P<ts>\d{9,11}(?:\.\d+)?)\s+\d+\s+(?P<client>\S+)\s+(?P<code>[A-Z_]+/\d{3})\s+(?P<bytes>\d+)\s+"
+                    r"(?P<method>[A-Z]+)\s+(?P<url>\S+)\s+(?P<user>\S+)\s+(?P<peer>\S+)(?:\s+(?P<type>\S+))?")
+
+
+def looks_like_squid(text: str) -> bool:
+    lines = [ln for ln in text.splitlines()[:200] if ln.strip()]
+    return bool(lines) and sum(bool(_SQUID.match(ln)) for ln in lines) / len(lines) >= 0.6
+
+
+def parse_squid(text: str) -> dict[str, pd.DataFrame]:
+    """Squid's native access.log -> the network stream with page, allowed/blocked and download size.
+
+    ``TCP_DENIED`` (or a 403) means the proxy blocked the request. Authenticated proxies log the user
+    name; without one the client address stands in for the user (re-map it if a user column exists)."""
+    rows = []
+    for ln in text.splitlines():
+        m = _SQUID.match(ln)
+        if not m:
+            continue
+        url, method = m["url"], m["method"]
+        if method == "CONNECT":                      # HTTPS tunnel: only host:port is visible
+            host, _, port = url.partition(":")
+            page, port = f"https://{host}/", int(port or 443)
+        else:
+            page = url
+            host = re.sub(r"^[a-z]+://", "", url, flags=re.I).split("/")[0]
+            host, _, p = host.partition(":")
+            port = int(p) if p.isdigit() else (443 if url.lower().startswith("https") else 80)
+        user = m["user"] if m["user"] not in ("-", "") else m["client"]
+        peer_ip = m["peer"].split("/", 1)[1] if "/" in m["peer"] else ""
+        rows.append(dict(timestamp=pd.to_datetime(float(m["ts"]), unit="s"), user=user.lower(),
+                         device=m["client"], src_ip=m["client"], dst_ip=peer_ip if peer_ip != "-" else "",
+                         dst_port=port, protocol="tcp", bytes_out=0, bytes_in=int(m["bytes"]),
+                         domain=host.lower(), url=page, category="", web_action=m["code"]))
+    return {"network": pd.DataFrame(rows)} if rows else {}

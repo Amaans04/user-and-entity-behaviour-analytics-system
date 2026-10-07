@@ -66,11 +66,16 @@ def alert_detail(row, key: str):
                 st.warning("Ground truth: no attack labelled here – a **false positive**.")
     with r:
         show(detector_bar(row), key=f"det_{key}")
-        if st.button(f"Investigate {row['entity']} →", key=f"inv_{key}"):
-            st.session_state["entity"] = row["entity"]
-            st.session_state["entity_date"] = row["date"]
-            st.session_state["page_current"] = "Investigate entity"
-            st.rerun()
+        b1, b2 = st.columns(2)
+        targets = [("Investigate", "Investigate entity", b1)]
+        if row["entity_type"] == "user":
+            targets.append(("What they did", "User activity", b2))
+        for label, page, col in targets:
+            if col.button(label, key=f"go_{page}_{key}", width="stretch"):
+                st.session_state["entity"] = row["entity"]
+                st.session_state["entity_date"] = row["date"]
+                st.session_state["page_current"] = page
+                st.rerun()
 
 
 def suppress_form(row, key: str):

@@ -325,13 +325,16 @@ par("p", "A layered pipeline turns raw logs into a short list of explained, risk
          "layer runs it continuously (Figures 6.1 and 6.3):")
 bullets([("Capture.", "Logs arrive by upload, drop folder, ingest API or agent and are mapped to one schema."),
          ("Features.", "Each user-day becomes 44 numbers and each device-day 19 (failed logins, unusual hours, MB to new "
-                       "domains, USB use ...), computed only from earlier days, as a live system would."),
+                       "domains, USB use ...), computed only from earlier days, as a live system would. When web-proxy "
+                       "logs are present, seven more describe what the user did online: pages, blocked attempts, risky "
+                       "sites, new kinds of site and downloads."),
          ("Profiles.", "Every entity has a personal and a department-peer baseline that adapt over time, but suspicious "
                        "days are never learned."),
-         ("Detection.", "Robust statistics, an unsupervised ensemble (Isolation Forest, LOF, autoencoder) and 22 "
+         ("Detection.", "Robust statistics, an unsupervised ensemble (Isolation Forest, LOF, autoencoder) and 26 "
                         "ATT&CK-mapped rules score every day independently."),
          ("Risk and response.", "Scores are fused into a 0-100 risk weighted by asset criticality and accumulated over "
-                                "days; alerts carry plain-English reasons, are grouped into cases and notified."),
+                                "days; alerts carry plain-English reasons, are grouped into cases and notified, and "
+                                "the analyst can open exactly what the person did that day."),
          ("Operation.", "A collector service imports new data and scores only what changed with the saved models; the "
                         "console requires sign-in and records every action.")])
 par("p", "Three principles run through the design. Corroboration: statistics alone can never raise an alert - the ML "
@@ -346,6 +349,8 @@ bullets(["To capture and normalise authentication, system-access, network and re
          "To build adaptive, poisoning-resistant behavioural profiles for both users and devices.",
          "To detect deviations without attack labels, using complementary statistical, machine-learning and rule layers.",
          "To produce one explained 0-100 risk score per entity-day and turn alerts into cases analysts can work.",
+         "To show, for any user and day, what the person actually did - pages visited, downloads, blocked attempts, "
+         "files and logins - with every out-of-character step flagged.",
          "To operate continuously and securely: incremental scoring identical to a full re-run, notifications, roles, "
          "API tokens and an audit trail.",
          "To evaluate honestly: detect every planted attack with precision above 0.9 and about one alert a day, check "
@@ -369,7 +374,7 @@ table("Table 6.1: Personas (composites of published studies)", [
 par("p", "Define: help an analyst spot account misuse early without adding to the flood of false alarms, and show why. "
          "Ideate: rules alone are blind to new behaviour, one deep model is a black box, so a hybrid was chosen. "
          "Prototype and test: the first prototype had precision 0.31; the P95-aware spread, quarantine and the "
-         "corroboration threshold raised it to 0.96.")
+         "corroboration threshold raised it above 0.9.")
 par("h2", "6.2 Translate the Needs of Customer into Product")
 table("Table 6.2: Needs translated into features - and why each feature exists", [
     ("Need", "Feature", "Why it is there"),
@@ -388,15 +393,16 @@ table("Table 6.2: Needs translated into features - and why each feature exists",
 par("h2", "6.3 Specification of the Product")
 table("Table 6.3: Main functional requirements", [
     ("ID", "Requirement"),
-    ("FR1", "Accept the four log streams as CSV, JSON, ZIP, Linux auth.log / syslog text or Windows event exports (CSV, .evtx); split mixed files; map columns by name and content; normalise values."),
+    ("FR1", "Accept the four log streams as CSV, JSON, ZIP, Linux auth.log / syslog text, Windows event exports (CSV, .evtx) or web-proxy logs (Squid, gateway CSV); split mixed files; map columns by name and content; normalise values."),
     ("FR2", "Collect continuously from a drop folder, a token-authenticated HTTP API and an endpoint agent."),
-    ("FR3", "Compute 44 user and 19 device features per day; learn personal and peer baselines over a rolling 45 days."),
-    ("FR4", "Score each day with statistics, the ML ensemble and 22 rules; fuse into a 0-100 risk with criticality and decay."),
+    ("FR3", "Compute 44 user (+7 web-activity) and 19 device features per day; learn personal and peer baselines over a rolling 45 days."),
+    ("FR4", "Score each day with statistics, the ML ensemble and 26 rules; fuse into a 0-100 risk with criticality and decay."),
     ("FR5", "After the learning period, score new data incrementally with saved models, identical to a full re-run."),
     ("FR6", "Raise explained alerts; group them into cases with status, assignee and notes; allow audited suppression."),
     ("FR7", "Notify analysts of new or escalated alerts by webhook or e-mail, without duplicates."),
     ("FR8", "Require sign-in with viewer / analyst / administrator roles; scope API tokens; audit every action."),
     ("FR9", "Measure precision, recall, F1, false positive rate, ROC-AUC and PR-AUC against labelled incidents."),
+    ("FR10", "Show each user's day as a timeline of pages, downloads, blocked attempts, files and logins, flagging what is new or risky for that person."),
 ], widths=[0.6, 6.0])
 table("Table 6.4: Key parameters", [
     ("Parameter", "Value", "Purpose"),
@@ -415,7 +421,13 @@ par("p", "Each user-day is summarised into 44 features in four groups - authenti
          "10 minutes followed by success, new hosts and countries, logins at hours rare for this user, impossible "
          "travel), system access (sensitive and restricted files, privilege escalation, new resources, account "
          "creation, log clearing, USB use), network (MB uploaded, MB to new domains and to cloud storage, mining-pool "
-         "connections, job sites) and resource use (CPU, memory, disk) - and each device-day into 19. Why: daily "
+         "connections, job sites) and resource use (CPU, memory, disk) - and each device-day into 19. Web-proxy logs "
+         "add seven web-activity features: pages visited, blocked requests, distinct blocked sites, requests to "
+         "hacking / anonymizer / malware sites, kinds of site never visited before, downloads and executable "
+         "downloads. The page, the site category (from the gateway or a built-in list), allowed or blocked, and the "
+         "downloaded file are read from the URL and the proxy's verdict. They join the models only when the logs "
+         "carry this detail, so flow-only data such as CERT is scored exactly as before; blocked attempts and tool "
+         "downloads are early warning signs that byte counts miss. Why: daily "
          "aggregates are cheap, private and explainable, and novelty features are computed only from earlier days, so "
          "the system behaves the same in a test as in live use.")
 par("p", "For each entity and feature the profile stores centre = median and spread = max(1.4826 x MAD, (P95 - median) "
@@ -429,12 +441,16 @@ bullets([("Statistics:", "the three largest positive deviations above z = 3, for
          ("ML ensemble:", "Isolation Forest [19], LOF [20] and an autoencoder [21] (scikit-learn [18]) trained on "
                           "normal days only and calibrated so that 1 = the 99th percentile of normal. Why three: they "
                           "fail differently; why unsupervised: real organisations have almost no labelled attacks."),
-         ("Rules:", "22 rules mapped to ATT&CK, e.g. brute force (T1110), impossible travel (T1078), privilege "
+         ("Rules:", "26 rules mapped to ATT&CK, e.g. brute force (T1110), impossible travel (T1078), privilege "
                     "escalation by a non-admin (T1068), upload to a new domain (T1048), mining pools (T1496), log "
                     "clearing (T1070), removable media used by an account with no such history (T1052.001, added "
                     "after the CERT evaluation, Section 10.3) and a successful login from an address that just failed "
                     "against several accounts (password spraying, T1110.003). Privilege escalation is judged against "
-                    "the account's own history, so routine administrator sudo is not flagged even without a staff list."),
+                    "the account's own history, so routine administrator sudo is not flagged even without a staff list. "
+                    "Four web rules cover a burst of blocked requests compared with the person's usual rate, an "
+                    "anonymizer or proxy site reached within an hour of a block (filter bypass, T1090), an executable "
+                    "downloaded from a site never used before (T1105) and first visits to hacking or anonymizer sites "
+                    "(T1588.002)."),
          ("Fusion:", "A = 1 - (1 - 0.28 stat)(1 - 0.10 peer)(1 - 0.30 ml)(1 - rules); daily risk = 100 x min(1, A x "
                      "criticality); entity risk(t) = entity risk(t-1) x 0.5^(days/3) + max(0, daily risk - 15). An "
                      "alert is raised at daily risk 45 (critical at 80, high at 60) or when accumulated risk reaches 60. "
@@ -457,6 +473,11 @@ par("p", "The engine trains the baselines and ML models once and saves them with
 par("h3", "6.4.4 Analyst workflow and security")
 bullets([("Cases:", "alerts on one entity within 7 days form a case with status, assignee and a notes timeline; "
                     "closing it records a verdict for every day. Why: an analyst should handle a person once, not 30 times."),
+         ("User activity:", "for any user and day the console lists the pages visited, downloads, blocked attempts, "
+                            "files and logins as one story, folds routine repeats and flags each step that is new or "
+                            "risky for that person (a new site, a block, a hacking or proxy site, an executable, a "
+                            "first-time sensitive file, a large upload). Why: a score says how unusual a day was; the "
+                            "analyst also needs to see what happened."),
          ("Suppression:", "a known-benign pattern can be silenced for one entity and alert type until an expiry date, "
                           "with a mandatory reason; suppressed alerts are kept and audited. Why: on CERT one user produced "
                           "91 alerts for one habit."),
@@ -488,7 +509,7 @@ table("Table 7.1: Software", [
     ("Streamlit, Plotly", "1.50+, 5.18+", "Analyst console and charts"),
     ("SQLite", "bundled", "Logs, scores, alerts, cases, users, audit"),
     ("Python standard library", "bundled", "Ingest API, password hashing, notifications, locking"),
-    ("psutil, Matplotlib, pytest", "5.9+, 3.7+, 7.4+", "Agent telemetry, report figures, 32 tests"),
+    ("psutil, Matplotlib, pytest", "5.9+, 3.7+, 7.4+", "Agent telemetry, report figures, 34 tests"),
 ], widths=[2.0, 2.0, 2.6])
 par("h2", "7.3 Datasets")
 bullets([("Simulated organisation (primary):", "48 employees and 12 servers over 60 days, 205,483 events, 11 planted "
@@ -507,7 +528,8 @@ h1("8. NOVELTY OF THE PROPOSED IDEA / PROJECT")
 par("p", "The individual techniques are established; the novelty is how they are combined and delivered (Table 8.1).")
 table("Table 8.1: Comparison with the reviewed work", [
     ("Capability", "Reviewed work", "This project"),
-    ("Users and devices profiled together", "users [9]-[11] or hosts [12]", "44 user + 19 device features"),
+    ("Users and devices profiled together", "users [9]-[11] or hosts [12]", "44 (+7 web) user + 19 device features"),
+    ("What the user actually did", "score only", "timeline of pages, downloads, blocks, files, logins"),
     ("Protection against baseline poisoning", "not addressed", "quarantine of risky days and confirmed threats"),
     ("No attack labels needed", "labels in [9], [10], [13]", "unsupervised + rules"),
     ("Corroborated, explained risk score", "single model, score only", "threshold needs agreement; plain-English reasons"),
@@ -517,7 +539,7 @@ table("Table 8.1: Comparison with the reviewed work", [
 bullets([("Poisoning-resistant adaptive baselines:", "profiles follow legitimate change, but risky days, rule hits and "
                                                      "confirmed threats are never learned, while cleared days are."),
          ("Corroboration by design:", "the threshold is derived from the score formula so that one statistical "
-                                      "deviation can never alert - the main reason precision rose from 0.31 to 0.96."),
+                                      "deviation can never alert - the main reason precision rose from 0.31 to above 0.9."),
          ("Exact incremental scoring:", "because every feature is causal, scoring only new days is provably the same "
                                         "as re-analysing everything, and an automated test checks it."),
          ("Honest validation:", "an independent benchmark with a held-out split and a documented negative result.")])
@@ -526,8 +548,9 @@ bullets([("Poisoning-resistant adaptive baselines:", "profiles follow legitimate
 h1("9. EXPERIMENTATION")
 par("h2", "9.1 Experimental Setup")
 par("p", "The simulated organisation has 48 employees in six departments, each with a laptop and personal habits, "
-         "plus 12 servers (108 entities). Days 1-5 are warm-up, days 6-30 the attack-free baseline, days 31-60 the "
-         "detection window, which contains the 11 attacks of Table 9.1 and four harmless oddities (working until 1 "
+         "plus 12 servers (108 entities); its web traffic is logged by a proxy with page, site category and allowed / "
+         "blocked, and people are occasionally blocked from streaming or betting sites. Days 1-5 are warm-up, days 6-30 the attack-free baseline, days 31-60 the "
+         "detection window, which contains the 12 attacks of Table 9.1 and four harmless oddities (working until 1 "
          "a.m., a business trip, a 20 GB backup, a new project) that create realistic false-alarm pressure.")
 table("Table 9.1: Planted attacks", [
     ("ID", "Scenario", "What appears in the logs", "ATT&CK"),
@@ -540,6 +563,7 @@ table("Table 9.1: Planted attacks", [
     ("INC-08", "Cryptomining", "Laptop CPU ~96% for three days, mining-pool traffic", "T1496"),
     ("INC-09", "Password spray", "30 failed logins on an admin account", "T1110"),
     ("INC-11", "Admin account abuse", "Accounts created, security log cleared", "T1136, T1070"),
+    ("INC-12", "Web-filter evasion", "Blocked 7 times on file-sharing sites, web proxy, nmap and mimikatz downloaded, 1.2 GB out", "T1090, T1105"),
 ], widths=[1.0, 1.7, 3.3, 1.0])
 par("h2", "9.2 Evaluation Protocol and Metrics")
 par("p", "Every entity-day of the detection window is a test case, positive if labelled as an attack. Labels are used "
@@ -553,7 +577,7 @@ bullets([("Main run, robustness and ablation:", "seed 42; five differently gener
                         "development half only; a 7-day trend layer evaluated the same way."),
          ("Operation:", "incremental update compared with a full re-run; the organisation replayed through the ingest "
                         "API as a live feed."),
-         ("Tests:", "32 automated tests of detection, ingestion, the incremental engine, the API, security, cases and "
+         ("Tests:", "34 automated tests of detection, ingestion, the incremental engine, the API, security, cases and "
                     "notifications.")])
 
 # ================================================================= 10. RESULTS
@@ -561,26 +585,28 @@ h1("10. RESULTS AND DISCUSSION")
 par("h2", "10.1 Simulated Organisation")
 table("Table 10.1: Detection results (detection window, seed 42)", [
     ("Metric", "Value"),
-    ("Incidents detected", "11 of 11, all on the day they started"),
-    ("Precision / recall / F1-score", "0.964 / 0.964 / 0.964 (TP 27, FP 1, FN 1)"),
-    ("False positive rate / alerts per day", "0.04% / about 0.9 for 108 entities"),
-    ("Fused ROC-AUC / PR-AUC", "1.000 / 0.999"),
-    ("Five organisations (mean)", "precision 0.938, recall 0.964, F1 0.951; 55 of 55 incidents"),
-    ("Behavioural layers only (no rules)", "F1 0.857, PR-AUC 0.951"),
-    ("Rules only / ML only / statistics only", "F1 0.982 / 0.789 / 0.451"),
+    ("Incidents detected", "12 of 12, all on the day they started"),
+    ("Precision / recall / F1-score", "0.935 / 0.967 / 0.951 (TP 29, FP 2, FN 1)"),
+    ("False positive rate / alerts per day", "0.09% / about 1.0 for 108 entities"),
+    ("Fused ROC-AUC / PR-AUC", "1.000 / 0.996"),
+    ("Five organisations (mean)", "precision 0.923, recall 0.967, F1 0.945; 60 of 60 incidents"),
+    ("Behavioural layers only (no rules)", "F1 0.854, PR-AUC 0.953"),
+    ("Rules only / ML only / statistics only", "F1 0.983 / 0.856 / 0.468"),
 ], widths=[2.6, 4.0])
-par("p", "The only false positive was the planted new-project oddity (risk 49), and the only false negative the pivot "
-         "laptop of the lateral movement (43.6, just below the threshold). The ablation needs careful reading: rules "
-         "look best only because they were written for these attack types; without any rule the behavioural layers "
-         "still reach F1 0.857 with no prior knowledge of the attacks. Statistics alone flag nearly everything unusual "
-         "(precision 0.30), which is why the threshold requires corroboration.")
+par("p", "The two false positives were planted oddities - the new project (risk 49) and the 20 GB backup server (49) - "
+         "and the only false negative the pivot laptop of the lateral movement (43.6, just below the threshold). The "
+         "ablation needs careful reading: rules look best only because they were written for these attack types; "
+         "without any rule the behavioural layers still reach F1 0.854 with no prior knowledge of the attacks. "
+         "Profiling web activity raised the ML ensemble on its own from F1 0.789 to 0.856, at the cost of one more "
+         "borderline false alarm. Statistics alone flag nearly everything unusual (precision 0.31), which is why the "
+         "threshold requires corroboration.")
 figure("reports/figures/roc_curves.png", "Figure 10.1: ROC curves of each detection layer (simulated organisation)", 4.4)
 par("h2", "10.2 Continuous Operation")
 par("p", "Cutting the logs at a day boundary and in the middle of a day, then updating incrementally, gave scores, "
-         "explanations and alerts identical to a full re-run. Replaying the organisation through the ingest API (30 days "
-         "of history, then 30 live days in 8-hour slices) took 2 full trainings and 29 incremental updates of 1.6-3.2 "
-         "seconds, with no rejected file or error, and reproduced the batch result exactly: 11 of 11 incidents, each in "
-         "the service pass after its data arrived, and F1 0.964. A full analysis of the organisation takes about 5 "
+         "explanations and alerts identical to a full re-run. Replaying the organisation as a live feed through the "
+         "collector's import path (30 days of history, then 30 live days in 8-hour slices) took one full training and 89 "
+         "incremental updates of 1.8-5.7 seconds (median 2.6), with no rejected file or error, and reproduced the batch "
+         "result exactly: 12 of 12 incidents and F1 0.951. A full analysis of the organisation takes about 5 "
          "seconds; CERT, with 12.8 million events, about 8 minutes.")
 par("h2", "10.3 CERT r4.2 Benchmark")
 table("Table 10.2: CERT r4.2, held-out half of the users (36 labelled accounts)", [
@@ -618,6 +644,8 @@ figure("report/screens/02_case.png", "Figure 10.3: A case - five daily alerts of
        "work item with actions, notes and explained alert detail", 6.3)
 figure("report/screens/03_entity.png", "Figure 10.4: Investigating an entity - learned baseline, risk over time with "
        "alerts and the labelled attack days", 6.3)
+figure("report/screens/05_activity.png", "Figure 10.5: User activity - the web-filter evasion (INC-12) as a flagged "
+       "story: seven blocks, a proxy site, two hacking-tool downloads, first-time files and 1.2 GB uploaded", 6.3)
 par("h2", "10.5 Discussion")
 par("p", "On the simulated organisation the system meets its objectives: every attack on its first day, about one alert "
          "a day, and a reason for each. CERT shows that this should be read as an upper bound - the organisation was "
@@ -633,11 +661,12 @@ par("h2", "11.1 Conclusion")
 par("p", "The project delivers a Python UEBA system that meets the problem statement and runs as a product. It captures "
          "four log streams from uploads, a drop folder, an authenticated API and an endpoint agent; profiles users and "
          "devices against adaptive, poisoning-resistant personal and peer baselines; detects deviations with robust "
-         "statistics, an unsupervised ensemble and 22 ATT&CK rules; and turns the evidence into explained, risk-ranked "
-         "alerts grouped into cases, notified to analysts and handled in a secured console. Incremental scoring is "
-         "identical to a full re-run.")
-par("p", "On the simulated organisation it detected all 11 attacks on their first day with precision, recall and F1 of "
-         "0.964 (mean F1 0.951 over five organisations), and the behavioural layers alone reached 0.857. On the "
+         "statistics, an unsupervised ensemble and 26 ATT&CK rules; and turns the evidence into explained, risk-ranked "
+         "alerts grouped into cases, notified to analysts and handled in a secured console, where the analyst can see "
+         "exactly what a person browsed, downloaded, was blocked from and opened. Incremental scoring is identical to a "
+         "full re-run.")
+par("p", "On the simulated organisation it detected all 12 attacks on their first day with precision 0.935, recall "
+         "0.967 and F1 0.951 (mean F1 0.945 over five organisations), and the behavioural layers alone reached 0.854. On the "
          "independent CERT r4.2 benchmark the out-of-the-box system found only 3 of 36 held-out insiders; with one "
          "generic indicator it found 22 of 36 at under one alert a day, while gradual job-seeker theft remained largely "
          "undetected - an honest result that defines the next step.")
@@ -645,7 +674,8 @@ par("h2", "11.2 Future Directions")
 bullets([("Quiet insiders:", "behavioural scores that let many small deviations add up, calibrated per organisation, and "
                              "sequence models [8], [10] for gradual behaviour."),
          ("More validation:", "CERT r5.2 / r6.2 and the real CLUE-LDS logs [3]."),
-         ("Native formats and scale:", "EVTX, Sysmon and syslog parsers, PostgreSQL storage, TLS in front of the console."),
+         ("Formats and scale:", "Sysmon, Zeek and DNS logs (EVTX, syslog and Squid are read today), PostgreSQL "
+                                "storage, TLS in front of the console."),
          ("Automated response:", "SOAR integration to disable an account or isolate a host once a threat is confirmed.")])
 
 # ---------------------------------------------------------------- abstract
@@ -665,16 +695,17 @@ for text in [
     "Most breaches now start with stolen credentials or an insider, whose actions look legitimate to signature-based "
     "tools. User and Entity Behaviour Analytics (UEBA) instead learns how each user and device normally behaves and "
     "flags deviations. This project builds a Python UEBA system and takes it from analytics to an operable product.",
-    "Four kinds of logs (authentication, system access, network, resource usage) are turned into 44 daily features per "
-    "user and 19 per device and compared with adaptive personal and department baselines that never learn suspicious "
-    "days. Robust statistics, an unsupervised ensemble (Isolation Forest, Local Outlier Factor, autoencoder) and 22 "
+    "Four kinds of logs (authentication, system access, network and web-proxy, resource usage) are turned into 44 daily "
+    "features per user (seven more for web activity when proxy logs are present) and 19 per device and compared with adaptive personal and department baselines that never learn suspicious "
+    "days. Robust statistics, an unsupervised ensemble (Isolation Forest, Local Outlier Factor, autoencoder) and 26 "
     "MITRE ATT&CK rules are fused into a 0-100 risk score that requires agreement between layers, and every alert "
     "explains itself. Around this core, logs arrive by upload, drop folder, an authenticated API or an endpoint agent; "
     "a collector service scores new data incrementally - provably identical to a full re-run - and notifies analysts; "
-    "alerts are grouped into cases; and the console is protected by roles, hashed passwords, scoped tokens and an "
+    "alerts are grouped into cases; analysts see what each person actually did - pages, downloads, blocked attempts and "
+    "files - with the out-of-character steps flagged; and the console is protected by roles, hashed passwords, scoped tokens and an "
     "audit trail.",
-    "On a simulated 48-person organisation with 11 planted attacks, all were detected on their first day with "
-    "precision, recall and F1 of 0.964 (mean F1 0.951 over five organisations), and a live replay through the API "
+    "On a simulated 48-person organisation with 12 planted attacks, all were detected on their first day with "
+    "precision 0.935, recall 0.967 and F1 0.951 (mean F1 0.945 over five organisations), and a live replay "
     "reproduced this exactly. On the independent CERT r4.2 benchmark the out-of-the-box system found only 3 of 36 "
     "held-out insiders because its behavioural layers ignore small deviations; one generic indicator raised this to 22 "
     "of 36 at under one alert a day, while gradual data theft by job seekers remained largely undetected.",
@@ -684,7 +715,7 @@ for text in [
     set_runs(Paragraph(el, ab._parent), text)
 if kw is not None:
     set_runs(Paragraph(kw, ab._parent), "UEBA, insider threat, anomaly detection, Isolation Forest, autoencoder, risk "
-             "scoring, explainable alerts, SOC, CERT.", lead="Keywords:")
+             "scoring, explainable alerts, web activity, SOC, CERT.", lead="Keywords:")
 
 # ---------------------------------------------------------------- abbreviations
 t = None
@@ -709,7 +740,7 @@ for k, v in abbr.items():
 # ---------------------------------------------------------------- source code appendix: keep the first three excerpts
 sc = find("SOURCE CODE", "Heading 1")
 set_runs(Paragraph(sc._p.getnext(), sc._parent),
-         "The complete source code - about 6,000 lines of Python in 22 modules, the analyst console and 32 automated "
+         "The complete source code - about 7,000 lines of Python in 23 modules, the analyst console and 34 automated "
          "tests - is in the project folder and its Git repository. Three key parts of the detection logic are "
          "reproduced below.")
 code_heads = []

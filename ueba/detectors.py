@@ -50,6 +50,9 @@ LABELS = {
     "proc_max": "max processes", "logins_to_device": "logins into this device",
     "failed_logins_to_device": "failed logins into this device",
     "distinct_users_on_device": "distinct users on device", "new_users_on_device": "new users on device",
+    "pages_visited": "web pages visited", "web_blocked": "blocked web requests", "blocked_sites": "blocked sites",
+    "risky_site_visits": "visits to hacking / anonymizer / malware sites", "new_categories": "new kinds of website",
+    "downloads": "file downloads", "executable_downloads": "executable / script downloads",
 }
 
 
@@ -203,6 +206,25 @@ RULES = [
          lambda d: d.get("spray_success", pd.Series(0, index=d.index)) > 0,
          lambda r: f"{r.spray_success:.0f} successful login(s) from an address that had just failed against "
                    "several different accounts"),
+    # ---- web activity (proxy / gateway logs) ----
+    Rule("R18", "Repeated attempts to reach blocked sites", 0.35, "Policy violation (web filter)", "user",
+         lambda d: ((d.get("web_blocked", pd.Series(0, index=d.index)) >= 5)
+                    & (d.get("web_blocked", pd.Series(0, index=d.index))
+                       >= 3 * (d.get("baseline_blocked", pd.Series(0, index=d.index)) + 1))),
+         lambda r: f"{r.web_blocked:.0f} blocked web requests to {r.blocked_sites:.0f} site(s) - usually "
+                   f"{r.get('baseline_blocked', 0):.0f} a day"),
+    Rule("R19", "Web filter bypass via proxy / VPN", 0.70, "T1090 Proxy", "user",
+         lambda d: d.get("block_bypass", pd.Series(0, index=d.index)) > 0,
+         lambda r: "Reached an anonymizer / proxy site within an hour of being blocked - getting round the web filter"),
+    Rule("R20", "Executable downloaded from a new site", 0.45, "T1105 Ingress Tool Transfer", "user",
+         lambda d: d.get("new_site_executables", pd.Series(0, index=d.index)) > 0,
+         lambda r: f"{r.new_site_executables:.0f} executable / script file(s) downloaded from a site this user "
+                   "never visited before"),
+    Rule("R21", "Visits to hacking or anonymizer sites", 0.30, "T1588.002 Obtain Capabilities: Tool", "user",
+         lambda d: ((d.get("risky_site_visits", pd.Series(0, index=d.index)) > 0)
+                    & (d.get("baseline_risky", pd.Series(1, index=d.index)) == 0)),
+         lambda r: f"{r.risky_site_visits:.0f} requests to hacking / anonymizer / malware sites - none in the "
+                   "learning period"),
     # ---- device rules ----
     Rule("D01", "Crypto-mining host", 0.80, "T1496 Resource Hijacking", "device",
          lambda d: d["mining_conns"] > 0,

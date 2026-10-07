@@ -20,7 +20,8 @@ import pandas as pd
 from . import detectors as det
 from . import cases, feedback
 from .config import CONFIG, DATA_DIR, DB_PATH, REPORTS_DIR, Config
-from .features import DEVICE_FEATURES, USER_FEATURES, build_features
+from . import web
+from .features import DEVICE_FEATURES, USER_FEATURES, WEB_FEATURES, build_features
 from .ingest import load_logs, load_table, save_tables, unified_events
 from .profiles import BaselineModel, descriptive_profiles
 from .risk import daily_risk, entity_risk, generate_alerts
@@ -90,6 +91,12 @@ def score_entities(feats: pd.DataFrame, cols: list, etype: str, train_start: str
     # privilege use during the learning period: routine for that account (no admin list needed)
     F["baseline_priv"] = (F["entity"].map(F.loc[train_mask].groupby("entity")["priv_esc"].sum())
                           .fillna(0).to_numpy() if "priv_esc" in cols else 0.0)
+    # web filter history: a person who is blocked a few times every day is not news; a burst is
+    if "web_blocked" in F:
+        F["baseline_blocked"] = F["entity"].map(F.loc[train_mask].groupby("entity")["web_blocked"].mean()) \
+            .fillna(0).round(1).to_numpy()
+        F["baseline_risky"] = F["entity"].map(F.loc[train_mask].groupby("entity")["risky_site_visits"].sum()) \
+            .fillna(0).to_numpy()
     rule, hits = det.apply_rules(F, etype, cfg.disabled_rules)
 
     def zfor(idx):
@@ -194,7 +201,8 @@ def load_models(db_path: Path) -> dict | None:
         return None
 
 
-def _reuse_problem(saved: dict | None, cfg: Config, train_start: str, train_end: str) -> str | None:
+def _reuse_problem(saved: dict | None, cfg: Config, train_start: str, train_end: str,
+                   feature_sets: dict) -> str | None:
     """Why the saved models can NOT be reused for an incremental update (None = they can)."""
     if not saved or "fingerprint" not in saved:
         return "no saved models"
@@ -204,7 +212,7 @@ def _reuse_problem(saved: dict | None, cfg: Config, train_start: str, train_end:
         return "learning window changed"
     if not saved.get("complete"):
         return "models were trained before the learning period was complete"
-    if saved.get("features") != {"user": USER_FEATURES, "device": DEVICE_FEATURES}:
+    if saved.get("features") != feature_sets:
         return "feature set changed"
     return None
 
@@ -234,6 +242,11 @@ def run(raw_dir: Path = DATA_DIR / "raw", db_path: Path = DB_PATH, cfg: Config =
 
     log("Building behavioural features")
     feats = build_features(frames, cfg)
+    # web pages / categories / blocks are profiled only when the logs carry them (proxy or gateway)
+    web_detail = web.has_web_detail(frames["network"])
+    feature_sets = {"user": USER_FEATURES + (WEB_FEATURES if web_detail else []), "device": DEVICE_FEATURES}
+    if web_detail:
+        log("  web gateway detail found: profiling pages, categories, blocked requests and downloads")
 
     fb = feedback.load(db_path)
     benign, threat = feedback.as_sets(fb)
@@ -243,7 +256,7 @@ def run(raw_dir: Path = DATA_DIR / "raw", db_path: Path = DB_PATH, cfg: Config =
     saved, prev = None, None
     if mode == "update":
         saved = load_models(db_path)
-        problem = _reuse_problem(saved, cfg, train_start, train_end)
+        problem = _reuse_problem(saved, cfg, train_start, train_end, feature_sets)
         if problem is None:
             prev = load_table(db_path, "scores") if Path(db_path).exists() else None
             if prev is None or prev.empty:
@@ -257,7 +270,7 @@ def run(raw_dir: Path = DATA_DIR / "raw", db_path: Path = DB_PATH, cfg: Config =
             log(f"Incremental update: reusing trained models, scoring days from {rescore_from}")
 
     parts, models = [], {}
-    for etype, cols in (("user", USER_FEATURES), ("device", DEVICE_FEATURES)):
+    for etype, cols in feature_sets.items():
         F = feats[etype]
         n_train = int(((F["date"] >= train_start) & (F["date"] < train_end)).sum()) if len(F) else 0
         if n_train < MIN_BASELINE_ROWS:
@@ -316,7 +329,7 @@ def run(raw_dir: Path = DATA_DIR / "raw", db_path: Path = DB_PATH, cfg: Config =
     if mode == "full":
         joblib.dump({**models, "cfg": cfg, "fingerprint": _fingerprint(cfg), "train_start": train_start,
                      "train_end": train_end, "complete": bool(last_day >= pd.Timestamp(train_end)),
-                     "features": {"user": USER_FEATURES, "device": DEVICE_FEATURES},
+                     "features": feature_sets,
                      "trained_at": datetime.now().isoformat(timespec="seconds")},
                     Path(db_path).with_name("models.joblib"))
 
