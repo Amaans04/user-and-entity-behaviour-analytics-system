@@ -53,6 +53,8 @@ LABELS = {
     "pages_visited": "web pages visited", "web_blocked": "blocked web requests", "blocked_sites": "blocked sites",
     "risky_site_visits": "visits to hacking / anonymizer / malware sites", "new_categories": "new kinds of website",
     "downloads": "file downloads", "executable_downloads": "executable / script downloads",
+    "browsing_minutes": "minutes online", "new_subdomains": "never-visited subdomains",
+    "random_subdomains": "random-looking subdomains of one site", "beaconing": "sites contacted at clockwork intervals",
 }
 
 
@@ -225,6 +227,15 @@ RULES = [
                     & (d.get("baseline_risky", pd.Series(1, index=d.index)) == 0)),
          lambda r: f"{r.risky_site_visits:.0f} requests to hacking / anonymizer / malware sites - none in the "
                    "learning period"),
+    Rule("R22", "Random-looking subdomains (possible tunnelling)", 0.60,
+         "T1071.004 Application Layer Protocol: DNS", "user",
+         lambda d: d.get("random_subdomains", pd.Series(0, index=d.index)) >= 30,
+         lambda r: f"{r.random_subdomains:.0f} machine-generated subdomains of one site in a day - data hidden in host "
+                   "names (DNS / HTTP tunnelling) or malware looking for its server"),
+    Rule("R23", "Machine-like beaconing to a new site", 0.55, "T1071.001 Application Layer Protocol: Web", "user",
+         lambda d: d.get("beaconing", pd.Series(0, index=d.index)) > 0,
+         lambda r: f"{r.beaconing:.0f} site(s) never used before, contacted at clockwork intervals all day - software "
+                   "calling home, not a person browsing"),
     # ---- device rules ----
     Rule("D01", "Crypto-mining host", 0.80, "T1496 Resource Hijacking", "device",
          lambda d: d["mining_conns"] > 0,

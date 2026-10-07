@@ -92,6 +92,19 @@ an executable from a never-visited site (T1105) and first visits to hacking site
 the person's day as a flagged story. It is metadata only - which page, never its content - and HTTPS pages are visible
 only if the proxy inspects TLS.
 
+**Can you see subdomains and how long someone spent on each website?**
+Yes. Every request keeps its full host (erp.ibm.com) and is grouped under the organisation's domain (ibm.com,
+with suffixes like .co.in handled); a subdomain the person never used before is flagged. Proxies log requests,
+not reading time, so time is estimated the way web-analytics tools do it: requests to a site less than 5 minutes
+apart are one visit, from the first to the last request plus a minute. The Websites tab shows each site, its
+subdomains, minutes, visits, data in / out and flags, against the person's usual minutes.
+
+**What security value do subdomains add?**
+Two detections. Hundreds of random-looking subdomains of one site in a day (x8k2q9...cdn-sync.net) is how data
+is smuggled out in host names - DNS / HTTP tunnelling - or how malware finds its server (R22, T1071.004). A
+never-used site contacted at clockwork intervals all day is software calling home, not a person (R23, T1071.001).
+Both fire on the practice pack's malware and on the simulated cryptominer, and never on normal days.
+
 **Why didn't precision go up when you added web activity?**
 Detection went from 11/11 to 12/12 and the ML ensemble alone improved from F1 0.79 to 0.86, but one more benign
 oddity (a 20 GB backup) now crosses the threshold, so precision is 0.935 instead of 0.964. I report it as it is.

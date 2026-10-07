@@ -406,3 +406,24 @@ def test_web_activity_features_and_rules():
     # plain flow records (no pages, nothing blocked) keep the original feature set
     flows = net.assign(url="", web_action="allowed")
     assert not web.has_web_detail(web.enrich(flows))
+
+
+def test_subdomains_time_on_site_and_beaconing():
+    from ueba import web
+    assert web.registered_domain("erp.ibm.com") == "ibm.com"
+    assert web.registered_domain("mail.irctc.co.in") == "irctc.co.in" and web.registered_domain("10.1.1.1") == "10.1.1.1"
+    t = pd.Timestamp("2026-06-22 10:00")
+    rows = [dict(timestamp=t + pd.Timedelta(minutes=m), url=f"https://erp.ibm.com/p/{m}") for m in (0, 2, 4)]   # one visit
+    rows += [dict(timestamp=t + pd.Timedelta(minutes=30), url="https://www.ibm.com/")]                         # a second
+    rows += [dict(timestamp=t + pd.Timedelta(hours=1, seconds=60 * i), url=f"https://x{i:02d}k9q2m7z4w8v.cdn-sync.net/c")
+             for i in range(40)]                                                    # clockwork + random subdomains
+    net = pd.DataFrame(rows).assign(user="kiran", domain="", web_action="allowed", category="")
+    net = web.enrich(net)
+    assert set(net["site"]) == {"ibm.com", "cdn-sync.net"} and "erp.ibm.com" in set(net["host"])
+    tos = web.time_on_sites(net).set_index("site")
+    assert tos.at["ibm.com", "visits"] == 2 and tos.at["ibm.com", "minutes"] == 6.0      # (4 + 1) + (0 + 1)
+    sig = web.tunnelling_and_beacons(net).iloc[0]
+    assert sig["random_subdomains"] == 40 and sig["beaconing"] == 1
+    # a person reading pages at irregular times is not a beacon
+    human = net[net["site"] == "ibm.com"]
+    assert web.tunnelling_and_beacons(human)["beaconing"].sum() == 0

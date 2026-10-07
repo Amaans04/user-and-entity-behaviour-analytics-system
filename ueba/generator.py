@@ -109,6 +109,20 @@ PAGES = {
                                                                               "/en-us/download/details.aspx?id={n}"],
     "ubuntu.com": ["/security/notices/USN-{n}-1", "/server/docs/{word}"], "economictimes.com": ["/markets/{word}/{n}"],
 }
+# subdomains per site (erp.ibm.com-style hosts); picked from the page path, so no random numbers are used
+HOSTS = {
+    "office365.com": ["outlook.office365.com", "portal.office365.com", "login.office365.com"],
+    "google.com": ["www.google.com", "mail.google.com", "docs.google.com", "meet.google.com"],
+    "github.com": ["github.com", "gist.github.com", "api.github.com"],
+    "slack.com": ["acme-corp.slack.com", "files.slack.com"],
+    "salesforce.com": ["acme.my.salesforce.com", "acme.lightning.salesforce.com"],
+    "linkedin.com": ["www.linkedin.com"], "atlassian.net": ["acme.atlassian.net"], "zoom.us": ["acme.zoom.us"],
+    "icicibank.com": ["cib.icicibank.com", "www.icicibank.com"],
+    "microsoft.com": ["learn.microsoft.com", "www.microsoft.com", "download.microsoft.com"],
+    "ubuntu.com": ["ubuntu.com", "releases.ubuntu.com"], "gst.gov.in": ["services.gst.gov.in", "www.gst.gov.in"],
+    "economictimes.com": ["economictimes.com", "m.economictimes.com"], "docker.io": ["hub.docker.io"],
+    "pypi.org": ["pypi.org", "files.pythonhosted.pypi.org"],
+}
 PAGE_WORDS = ["pipeline", "invoice", "deploy", "budget", "login", "report", "pandas", "docker", "timeout",
               "payroll", "forecast", "kubernetes", "sales", "review", "export", "python", "api", "quarterly"]
 DOWNLOADS = {"office365.com": [".pdf", ".xlsx", ".docx", ".pptx"], "salesforce.com": [".csv", ".pdf"],
@@ -270,7 +284,8 @@ class LogGenerator:
                           word2=pick(PAGE_WORDS), team=pick(["finance", "sales", "hr", "eng"]))
         if download:
             path = f"/download/{pick(PAGE_WORDS)}_{int(w.integers(1, 99)):02d}{pick(DOWNLOADS[domain])}"
-        return f"https://{domain}{path}"
+        hosts = HOSTS.get(domain, [domain])
+        return f"https://{hosts[zlib.crc32(path.encode()) % len(hosts)]}{path}"
 
     def net(self, ts, u, domain, port, bytes_out, bytes_in, device=None, internal=False, url=None,
             action="allowed"):

@@ -62,7 +62,7 @@ def main(seeds=(42, 7, 123, 2024, 99)):
         with tempfile.TemporaryDirectory() as tmp:
             raw = Path(tmp) / "raw"
             generate_dataset(raw, cfg)
-            res = run(raw, Path(tmp) / "ueba.db", cfg, evaluate_results=True)
+            res = run(raw, Path(tmp) / "ueba.db", cfg, evaluate_results=True, reports_dir=None)
         m = res["metrics"]
         rows.append(dict(seed=seed, incidents=f"{m['incidents_detected']}/{m['incidents_total']}",
                          precision=m["precision"], recall=m["recall"], f1=m["f1"],

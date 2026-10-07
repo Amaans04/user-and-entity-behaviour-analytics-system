@@ -13,8 +13,9 @@ Pack B - "server_logs.zip" (60 days, 25 people, written from scratch here):
     auth.log            raw Linux syslog of a bastion host: sshd logins, sudo, su, useradd
     Security.csv        Windows Event Viewer "Save All Events As" export of the domain controller
                         (4624 / 4625 logons, 4688 process starts, 4720 account created, 1102 log cleared)
-    access.log          Squid web-proxy log (SSL inspection on, so full page URLs are visible): pages,
-                        downloads and TCP_DENIED blocks for everyone
+    access.log          Squid web-proxy log (SSL inspection on, so full page URLs are visible): pages on
+                        public sites and on the company's own erp. / hrms. / wiki. subdomains, downloads and
+                        TCP_DENIED blocks for everyone
     -> answer_key_B.csv
 """
 from __future__ import annotations
@@ -200,7 +201,10 @@ SITES = {"https://outlook.office365.com/mail/inbox": 5, "https://teams.microsoft
          "https://www.google.com/search?q={w}": 3, "https://stackoverflow.com/questions/{n}/{w}": 2,
          "https://github.com/corp/{w}/pull/{n}": 2, "https://corp.atlassian.net/browse/OPS-{n}": 2,
          "https://www.linkedin.com/feed/": 1, "https://economictimes.indiatimes.com/markets/{w}": 1,
-         "https://docs.python.org/3/library/{w}.html": 1, "https://www.icicibank.com/corporate/payments/{n}": 1}
+         "https://docs.python.org/3/library/{w}.html": 1, "https://www.icicibank.com/corporate/payments/{n}": 1,
+         # the company's own web apps, one subdomain each (erp.<company>, hrms.<company> ...)
+         "https://erp.acme-corp.in/finance/ledger/{n}": 3, "https://hrms.acme-corp.in/leave/{n}": 1,
+         "https://wiki.acme-corp.in/display/OPS/{w}": 2, "https://mail.acme-corp.in/owa/inbox": 3}
 WORDS = ["deploy", "invoice", "timeout", "nginx", "payroll", "backup", "pandas", "docker", "budget", "report"]
 POLICY = ["www.netflix.com", "www.hotstar.com", "www.bet365.com", "store.steampowered.com", "www.twitch.tv"]
 
@@ -252,6 +256,15 @@ def proxy_log(people, office, shift, start, truth, seed):
     line(d5 + timedelta(minutes=20), ip, "TCP_MISS/200", 1_200_000, "GET",
          "https://gentilkiwi.com/downloads/mimikatz_trunk.zip", "rhea", "DIRECT/51.15.4.4", "application/zip")
     truth.append(("rhea", str(d5.date()), "blocked from file-sharing, web proxy to bypass, hacking tools downloaded"))
+
+    # ---- incident 6: malware on kiran's laptop calls home every minute, data hidden in random subdomains
+    d6 = start + timedelta(days=52, hours=10)
+    for i in range(360):
+        sub = "".join(rng.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(18))
+        line(d6 + timedelta(seconds=60 * i + rng.uniform(-1.5, 1.5)), office["kiran"], "TCP_MISS/200", 412, "GET",
+             f"https://{sub}.cdn-telemetry-sync.net/c?d={rng.randint(10**7, 10**8)}", "kiran", "DIRECT/193.42.1.7",
+             "application/json")
+    truth.append(("kiran", str(d6.date()), "malware beaconing every minute, data in random subdomains (C2 / tunnelling)"))
     rows.sort()
     return [r for _, r in rows]
 

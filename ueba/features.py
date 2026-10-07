@@ -47,8 +47,9 @@ WEB_FEATURES = [
     "pages_visited", "web_blocked", "blocked_sites", "risky_site_visits", "new_categories",
     "downloads", "executable_downloads",
 ]
-# rule-only web signals (not modelled; read by the threat rules)
-WEB_RULE_SIGNALS = ["block_bypass", "new_site_executables"]
+# web signals that are not modelled: read by the threat rules and shown on the User activity page
+WEB_RULE_SIGNALS = ["block_bypass", "new_site_executables", "browsing_minutes", "new_subdomains",
+                    "random_subdomains", "beaconing"]
 DEVICE_FEATURES = [
     "logins_to_device", "failed_logins_to_device", "distinct_users_on_device", "new_users_on_device",
     "connections", "bytes_out_mb", "max_upload_mb", "new_domains", "new_domain_upload_mb",
@@ -296,6 +297,10 @@ def _web_parts(net: pd.DataFrame) -> list:
         block_bypass=("bypass", "sum"), new_site_executables=("new_exe", "sum")))]
     cat = n[n["category"] != ""]
     parts.append(count_new(cat, "user", "category", "new_categories"))
+    seen = n[ok & (n["url"] != "")]                       # subdomains are only known from full URLs / hosts
+    parts.append(count_new(seen, "user", "host", "new_subdomains"))
+    parts.append(web.time_online(n))
+    parts.append(web.tunnelling_and_beacons(n))
     return parts
 
 

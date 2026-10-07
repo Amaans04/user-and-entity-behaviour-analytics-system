@@ -90,7 +90,7 @@ def downloaded_file(url: pd.Series) -> pd.Series:
 
 
 def enrich(net: pd.DataFrame) -> pd.DataFrame:
-    """Add url / category / web_action / file columns to a network frame (idempotent)."""
+    """Add url / category / web_action / file / host / site columns to a network frame (idempotent)."""
     n = net.copy()
     for c, d in (("url", ""), ("category", ""), ("web_action", "allowed"), ("file", "")):
         if c not in n.columns:
@@ -109,7 +109,7 @@ def enrich(net: pd.DataFrame) -> pd.DataFrame:
     nofile = n["file"] == ""
     if nofile.any():
         n.loc[nofile, "file"] = downloaded_file(n.loc[nofile, "url"])
-    return n
+    return add_sites(n)
 
 
 def has_web_detail(net: pd.DataFrame) -> bool:
@@ -129,3 +129,162 @@ def is_risky(category: pd.Series) -> pd.Series:
 
 def is_executable(file: pd.Series) -> pd.Series:
     return file.str.lower().str.extract(r"\.([a-z0-9]+)$", expand=False).isin(EXECUTABLE_EXT)
+
+
+# --------------------------------------------------------------------------
+# sites and subdomains
+# --------------------------------------------------------------------------
+# two-part public suffixes common in the logs we see (a full public-suffix list is not needed for this)
+MULTI_SUFFIXES = {"co.in", "gov.in", "ac.in", "org.in", "net.in", "edu.in", "nic.in", "res.in", "co.uk", "org.uk",
+                  "ac.uk", "gov.uk", "com.au", "net.au", "co.jp", "com.br", "co.za", "com.sg", "com.my", "co.nz"}
+_IP = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
+
+
+def host_of(url: str, domain: str) -> str:
+    """Full host name of a request - the subdomain level (erp.ibm.com), from the URL when there is one."""
+    u = str(url or "").strip().lower()
+    if u:
+        h = re.sub(r"^[a-z]+://", "", u).split("/")[0].split("?")[0].split("@")[-1].split(":")[0]
+        if h:
+            return h
+    return str(domain or "").strip().lower()
+
+
+def registered_domain(host: str) -> str:
+    """The organisation's domain a host belongs to: erp.ibm.com -> ibm.com, mail.irctc.co.in -> irctc.co.in."""
+    h = str(host or "").strip().lower().rstrip(".")
+    if not h or _IP.match(h) or "." not in h:
+        return h
+    parts = h.split(".")
+    n = 3 if ".".join(parts[-2:]) in MULTI_SUFFIXES and len(parts) >= 3 else 2
+    return ".".join(parts[-n:])
+
+
+def add_sites(n: pd.DataFrame) -> pd.DataFrame:
+    """Add ``host`` (subdomain level) and ``site`` (registered domain) columns."""
+    n = n.copy()
+    url = n["url"] if "url" in n else pd.Series("", index=n.index)
+    pairs = pd.Series(list(zip(url.fillna("").astype(str), n["domain"].fillna("").astype(str))), index=n.index)
+    hosts = {p: host_of(*p) for p in pairs.unique()}
+    n["host"] = pairs.map(hosts)
+    sites = {h: registered_domain(h) for h in n["host"].unique()}
+    n["site"] = n["host"].map(sites)
+    return n
+
+
+# --------------------------------------------------------------------------
+# time spent
+# --------------------------------------------------------------------------
+IDLE = pd.Timedelta(minutes=5)       # a gap longer than this ends a visit
+TAIL = pd.Timedelta(minutes=1)       # credit for reading the last page of a visit
+
+
+def _visits(df: pd.DataFrame, keys: list) -> pd.DataFrame:
+    d = df.sort_values(keys + ["timestamp"])
+    gap = d.groupby(keys)["timestamp"].diff()
+    d = d.assign(visit=(gap.isna() | (gap > IDLE)).cumsum())
+    v = d.groupby(keys + ["visit"])["timestamp"].agg(["min", "max", "size"]).reset_index()
+    v["minutes"] = ((v["max"] - v["min"]) + TAIL).dt.total_seconds() / 60
+    return v
+
+
+def time_on_sites(net: pd.DataFrame) -> pd.DataFrame:
+    """Estimated minutes per (user, date, site). Proxies log requests, not time on page, so - like web analytics
+    tools - requests to a site less than 5 minutes apart count as one visit, lasting from the first to the last
+    request plus a minute for reading. Blocked requests are not time spent."""
+    cols = ["user", "date", "site", "minutes", "visits", "requests"]
+    if net is None or net.empty:
+        return pd.DataFrame(columns=cols)
+    n = net if "site" in net else add_sites(net)
+    n = n[n["web_action"] != "blocked"] if "web_action" in n else n
+    if n.empty:
+        return pd.DataFrame(columns=cols)
+    v = _visits(n.assign(date=n["timestamp"].dt.date.astype(str)), ["user", "date", "site"])
+    out = v.groupby(["user", "date", "site"]).agg(minutes=("minutes", "sum"), visits=("visit", "size"),
+                                                  requests=("size", "sum")).reset_index()
+    out["minutes"] = out["minutes"].round(1)
+    return out[cols]
+
+
+def time_online(net: pd.DataFrame) -> pd.DataFrame:
+    """Estimated minutes per (user, date) actively on the web, whatever the site (overlapping tabs counted once)."""
+    if net is None or net.empty:
+        return pd.DataFrame(columns=["user", "date", "browsing_minutes"])
+    n = net[net["web_action"] != "blocked"] if "web_action" in net else net
+    if n.empty:
+        return pd.DataFrame(columns=["user", "date", "browsing_minutes"])
+    v = _visits(n.assign(date=n["timestamp"].dt.date.astype(str)), ["user", "date"])
+    return v.groupby(["user", "date"])["minutes"].sum().round(1).rename("browsing_minutes").reset_index()
+
+
+# --------------------------------------------------------------------------
+# tunnelling and beaconing
+# --------------------------------------------------------------------------
+QUIET_CATEGORIES = ("collaboration", "development", "search", "technology", "finance", "news", "social", "streaming")
+
+
+def _entropy(s: str) -> float:
+    if not s:
+        return 0.0
+    p = pd.Series(list(s)).value_counts(normalize=True).to_numpy()
+    return float(-(p * np.log2(p)).sum())
+
+
+def random_label(host: str, site: str) -> bool:
+    """Does the subdomain part look machine-generated (encoded data, a DGA)? e.g. a8f3k2x9q1z7.cdn-sync.net"""
+    sub = host[: -len(site)].rstrip(".") if site and host.endswith(site) else ""
+    label = sub.split(".")[0] if sub else ""
+    if len(label) < 12:
+        return False
+    digits = sum(c.isdigit() for c in label)
+    return digits >= 2 and _entropy(label) >= 3.2
+
+
+def site_signals(net: pd.DataFrame) -> pd.DataFrame:
+    """Per (user, date, site): distinct random-looking subdomains and whether requests run like clockwork
+    (vectorised - proxy logs can hold millions of rows)."""
+    cols = ["user", "date", "site", "random_hosts", "clockwork"]
+    if net is None or net.empty:
+        return pd.DataFrame(columns=cols)
+    n = net if "site" in net else add_sites(net)
+    n = n.assign(date=n["timestamp"].dt.date.astype(str))[["user", "date", "site", "host", "timestamp"]]
+    keys = ["user", "date", "site"]
+    uh = n[["host", "site"]].drop_duplicates()
+    rnd_hosts = {h for h, s_ in zip(uh["host"], uh["site"]) if random_label(h, s_)}
+    out = n.groupby(keys).size().rename("requests").to_frame()
+    out["random_hosts"] = n[n["host"].isin(rnd_hosts)].groupby(keys)["host"].nunique()
+    big = out.index[out["requests"] >= 24]
+    out["clockwork"] = False
+    if len(big):
+        b = n.set_index(keys).loc[big].reset_index().sort_values(keys + ["timestamp"])
+        b["gap"] = b.groupby(keys)["timestamp"].diff().dt.total_seconds()
+        g = b[b["gap"] > 0].groupby(keys)["gap"].agg(["size", "median", "mean", "std"])
+        ok = (g["size"] >= 20) & (g["median"] >= 20) & (g["std"] / g["mean"] < 0.25)
+        out.loc[ok[ok].index, "clockwork"] = True
+    out = out.reset_index()
+    out["random_hosts"] = out["random_hosts"].fillna(0).astype(int)
+    return out[cols]
+
+
+def tunnelling_and_beacons(net: pd.DataFrame) -> pd.DataFrame:
+    """Per user-day:
+
+    * ``random_subdomains`` - the most distinct random-looking subdomains of any one site: hiding data in DNS /
+      host names (DNS tunnelling, DGA command-and-control) produces hundreds a day, normal browsing almost none;
+    * ``beaconing``         - sites first contacted that day with at least 24 requests at clockwork intervals
+      (gaps vary by less than 25%): software calling home, as malware does; people do not browse like that.
+    """
+    cols = ["user", "date", "random_subdomains", "beaconing"]
+    sig = site_signals(net)
+    if sig.empty:
+        return pd.DataFrame(columns=cols)
+    n = net if "site" in net else add_sites(net)
+    n = n.assign(date=n["timestamp"].dt.date.astype(str))
+    first = n.groupby(["user", "site"])["date"].min().rename("first").reset_index()
+    cat = n.groupby("site")["category"].first() if "category" in n else pd.Series(dtype=str)
+    sig = sig.merge(first, on=["user", "site"], how="left")
+    sig["beacon"] = (sig["clockwork"] & (sig["date"] == sig["first"])
+                     & ~sig["site"].map(cat).isin(QUIET_CATEGORIES)).astype(int)
+    out = sig.groupby(["user", "date"]).agg(random_subdomains=("random_hosts", "max"),
+                                            beaconing=("beacon", "sum")).reset_index()
+    return out[cols]

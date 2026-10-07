@@ -23,7 +23,7 @@
 | CSV / JSON / JSON-lines tables, any column names | log type and columns matched by name **and by content** (a column of URLs is the website, a column of IPs is an address) |
 | One file mixing logins, file access, web traffic... | split by its event-type column; you can change what each value means; logoff events are skipped |
 | Linux `auth.log`, `secure`, syslog text | sshd logins (accepted / failed), `sudo` / `su` (privilege use), `useradd` (account creation) |
-| Web proxy: Squid `access.log`, web-gateway CSV (URL, category, action) | every page, site category, allowed / blocked, downloaded files; blocked attempts, filter bypass through a proxy / VPN site and tool downloads are detected |
+| Web proxy: Squid `access.log`, web-gateway CSV (URL, category, action) | every page and subdomain, site category, allowed / blocked, downloaded files, estimated minutes per website; blocked attempts, filter bypass through a proxy / VPN site, tool downloads, random-subdomain tunnelling and clockwork beaconing are detected |
 | Windows Event Viewer CSV export, PowerShell `Export-Csv`, raw `.evtx` | logons 4624/4625, process starts 4688, file access 4663, account / group changes 4720/4728/4732, log cleared 1102 |
 | Only one kind of log | fine - the other features stay at zero |
 | No staff list / asset list | fine - everyone is one peer group; privilege use is judged against each account's own history |
@@ -57,8 +57,9 @@
   Correct two matches by hand in the logins part: *src_device ← Host*, *dest_host ← Target*.
   Expected: all 12 attacks found (answer_key_A.csv).
 * **server_logs.zip** - a raw Linux `auth.log`, a Windows Event Viewer `Security.csv` and a Squid proxy `access.log`.
-  Expected: 5 of 5 attacks found - SSH brute force, insider root + backdoor, password spray, account creation +
-  log clearing, and rhea getting round the web filter with a proxy site and downloading hacking tools
-  (answer_key_B.csv).
+  Expected: 6 of 6 attacks found - SSH brute force, insider root + backdoor, password spray, account creation +
+  log clearing, rhea getting round the web filter with a proxy site and downloading hacking tools, and malware
+  on kiran's laptop calling home every minute through random subdomains (answer_key_B.csv). Open User activity
+  -> Websites for any person to show subdomains (erp. / hrms. / wiki.acme-corp.in) and minutes per site.
 
 Do each once, start to finish, before the viva.

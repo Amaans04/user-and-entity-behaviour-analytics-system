@@ -3,14 +3,14 @@
     "2026-07-31",
     "2026-08-29"
   ],
-  "entity_days_scored": 2358,
+  "entity_days_scored": 2363,
   "attack_entity_days": 30,
   "alerts": 31,
   "confusion": {
     "tp": 29,
     "fp": 2,
     "fn": 1,
-    "tn": 2326
+    "tn": 2331
   },
   "precision": 0.935,
   "recall": 0.967,
@@ -20,31 +20,31 @@
   "detectors": {
     "Fused risk score": {
       "roc_auc": 1.0,
-      "pr_auc": 0.996
+      "pr_auc": 0.998
     },
     "Personal baseline (z-score)": {
       "roc_auc": 0.997,
-      "pr_auc": 0.938
+      "pr_auc": 0.933
     },
     "Peer-group baseline": {
-      "roc_auc": 0.998,
-      "pr_auc": 0.942
+      "roc_auc": 0.983,
+      "pr_auc": 0.959
     },
     "ML ensemble": {
-      "roc_auc": 1.0,
-      "pr_auc": 0.968
+      "roc_auc": 0.999,
+      "pr_auc": 0.918
     },
     "Isolation Forest": {
-      "roc_auc": 0.879,
-      "pr_auc": 0.644
+      "roc_auc": 0.844,
+      "pr_auc": 0.517
     },
     "Local Outlier Factor": {
-      "roc_auc": 0.966,
-      "pr_auc": 0.912
+      "roc_auc": 0.949,
+      "pr_auc": 0.84
     },
     "Autoencoder": {
-      "roc_auc": 0.998,
-      "pr_auc": 0.789
+      "roc_auc": 0.996,
+      "pr_auc": 0.609
     },
     "Threat rules": {
       "roc_auc": 0.983,
@@ -61,12 +61,12 @@
       "incident": "INC-01",
       "scenario": "brute_force",
       "mitre": "T1110 Brute Force",
-      "entities": "sai.menon",
+      "entities": "pooja.sharma",
       "days": 1,
       "detected": true,
       "first_alert": "2026-08-03",
       "delay_days": 0,
-      "max_risk": 99.1,
+      "max_risk": 99.7,
       "top_severity": "critical",
       "caught_by": "ML ensemble, peer group, personal baseline, threat rules"
     },
@@ -74,7 +74,7 @@
       "incident": "INC-02",
       "scenario": "impossible_travel",
       "mitre": "T1078 Valid Accounts",
-      "entities": "reyansh.shetty",
+      "entities": "priya.reddy",
       "days": 1,
       "detected": true,
       "first_alert": "2026-08-06",
@@ -87,7 +87,7 @@
       "incident": "INC-03",
       "scenario": "off_hours_access",
       "mitre": "T1078 Valid Accounts",
-      "entities": "LT-HR-024, sneha.singh",
+      "entities": "LT-HR-023, meera.verma",
       "days": 1,
       "detected": true,
       "first_alert": "2026-08-08",
@@ -100,7 +100,7 @@
       "incident": "INC-04",
       "scenario": "data_exfiltration",
       "mitre": "T1567 Exfiltration Over Web Service",
-      "entities": "LT-ENG-008, pooja.pillai",
+      "entities": "LT-ENG-014, suresh.khan",
       "days": 1,
       "detected": true,
       "first_alert": "2026-08-11",
@@ -113,7 +113,7 @@
       "incident": "INC-05",
       "scenario": "insider_slow_exfiltration",
       "mitre": "T1567.002 Exfiltration to Cloud Storage",
-      "entities": "LT-FIN-018, varun.khan",
+      "entities": "LT-FIN-015, sana.pillai",
       "days": 5,
       "detected": true,
       "first_alert": "2026-08-14",
@@ -126,7 +126,7 @@
       "incident": "INC-06",
       "scenario": "privilege_escalation",
       "mitre": "T1068 Exploitation for Privilege Escalation",
-      "entities": "vivaan.menon",
+      "entities": "deepak.singh",
       "days": 1,
       "detected": true,
       "first_alert": "2026-08-16",
@@ -139,7 +139,7 @@
       "incident": "INC-07",
       "scenario": "lateral_movement",
       "mitre": "T1021 Remote Services",
-      "entities": "LT-ENG-014, farhan.pillai",
+      "entities": "LT-ENG-003, gaurav.menon",
       "days": 1,
       "detected": true,
       "first_alert": "2026-08-20",
@@ -152,12 +152,12 @@
       "incident": "INC-08",
       "scenario": "cryptomining",
       "mitre": "T1496 Resource Hijacking",
-      "entities": "LT-ENG-009, reyansh.kulkarni",
+      "entities": "LT-ENG-002, varun.verma",
       "days": 3,
       "detected": true,
       "first_alert": "2026-08-22",
       "delay_days": 0,
-      "max_risk": 93.3,
+      "max_risk": 96.7,
       "top_severity": "critical",
       "caught_by": "ML ensemble, peer group, personal baseline, threat rules"
     },
@@ -165,7 +165,7 @@
       "incident": "INC-09",
       "scenario": "brute_force",
       "mitre": "T1110 Brute Force",
-      "entities": "meera.patel",
+      "entities": "imran.singh",
       "days": 1,
       "detected": true,
       "first_alert": "2026-08-25",
@@ -178,7 +178,7 @@
       "incident": "INC-10",
       "scenario": "impossible_travel",
       "mitre": "T1078 Valid Accounts",
-      "entities": "ananya.pillai",
+      "entities": "harsh.reddy",
       "days": 1,
       "detected": true,
       "first_alert": "2026-08-27",
@@ -191,7 +191,7 @@
       "incident": "INC-11",
       "scenario": "admin_account_abuse",
       "mitre": "T1136 Create Account / T1070 Indicator Removal",
-      "entities": "reyansh.iyer",
+      "entities": "maria.singh",
       "days": 1,
       "detected": true,
       "first_alert": "2026-08-28",
@@ -204,7 +204,7 @@
       "incident": "INC-12",
       "scenario": "web_policy_evasion",
       "mitre": "T1090 Proxy / T1105 Ingress Tool Transfer",
-      "entities": "LT-FIN-022, karthik.menon",
+      "entities": "LT-FIN-020, nisha.menon",
       "days": 1,
       "detected": true,
       "first_alert": "2026-08-19",
@@ -216,55 +216,55 @@
   ],
   "false_positives": [
     {
-      "alert_id": "AL-0005",
-      "date": "2026-08-10",
-      "entity": "neha.rao",
-      "title": "Off-hours sensitive access",
-      "risk_score": 56.3
+      "alert_id": "AL-0016",
+      "date": "2026-08-17",
+      "entity": "LT-ITA-040",
+      "title": "Behavioural anomaly",
+      "risk_score": 48.6
     },
     {
       "alert_id": "AL-0022",
       "date": "2026-08-21",
-      "entity": "ayaan.sharma",
+      "entity": "diya.joshi",
       "title": "Behavioural anomaly",
-      "risk_score": 49.5
+      "risk_score": 49.4
     }
   ],
   "threshold_sweep": [
     {
       "threshold": 20,
-      "precision": 0.4,
+      "precision": 0.288,
       "recall": 1.0,
-      "f1": 0.571,
-      "alerts": 75
+      "f1": 0.448,
+      "alerts": 104
     },
     {
       "threshold": 25,
-      "precision": 0.417,
+      "precision": 0.337,
       "recall": 1.0,
-      "f1": 0.588,
-      "alerts": 72
+      "f1": 0.504,
+      "alerts": 89
     },
     {
       "threshold": 30,
-      "precision": 0.526,
+      "precision": 0.517,
       "recall": 1.0,
-      "f1": 0.69,
-      "alerts": 57
+      "f1": 0.682,
+      "alerts": 58
     },
     {
       "threshold": 35,
-      "precision": 0.577,
+      "precision": 0.769,
       "recall": 1.0,
-      "f1": 0.732,
-      "alerts": 52
+      "f1": 0.87,
+      "alerts": 39
     },
     {
       "threshold": 40,
-      "precision": 0.811,
+      "precision": 0.909,
       "recall": 1.0,
-      "f1": 0.896,
-      "alerts": 37
+      "f1": 0.952,
+      "alerts": 33
     },
     {
       "threshold": 45,
@@ -275,17 +275,17 @@
     },
     {
       "threshold": 50,
-      "precision": 0.967,
+      "precision": 1.0,
       "recall": 0.967,
-      "f1": 0.967,
-      "alerts": 30
+      "f1": 0.983,
+      "alerts": 29
     },
     {
       "threshold": 55,
-      "precision": 0.967,
+      "precision": 1.0,
       "recall": 0.967,
-      "f1": 0.967,
-      "alerts": 30
+      "f1": 0.983,
+      "alerts": 29
     },
     {
       "threshold": 60,

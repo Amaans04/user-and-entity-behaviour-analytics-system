@@ -27,6 +27,12 @@ def _metric(c, label: str, today: float, usual: float, fmt: str = "{:,.0f}"):
              help="Today's value and this person's median day during the learning period")
 
 
+def _net_select(cols: list[str]) -> str:
+    """Only the network columns this workspace's database has (analyses before web detail lack url etc.)."""
+    have = set(Q("PRAGMA table_info(network)")["name"])
+    return ", ".join(c for c in cols if c in have)
+
+
 def _text(df: pd.DataFrame) -> pd.DataFrame:
     """SQLite hands back mixed object columns (None, numbers); make every text column plain strings."""
     df = df.copy()
@@ -80,7 +86,10 @@ def page_activity():
     # ---------------------------------------------------------------- the day's data
     net = Q("SELECT * FROM network WHERE user=? AND date=? ORDER BY timestamp", (user, day))
     net = _text(web.enrich(net)) if len(net) else net
-    seen_sites = set(Q("SELECT DISTINCT domain FROM network WHERE user=? AND date<?", (user, day))["domain"])
+    prev = Q(f"SELECT DISTINCT {_net_select(['url', 'domain'])} FROM network WHERE user=? AND date<?", (user, day))
+    prev = web.add_sites(prev.assign(url=prev["url"].fillna("") if "url" in prev else "")) if len(prev) else prev
+    seen_sites = set(prev["site"]) if len(prev) else set()
+    seen_hosts = set(prev["host"]) if len(prev) else set()
     acc = _text(Q("SELECT timestamp, device, resource, action, sensitivity, status FROM access WHERE user=? "
                   "AND date=? ORDER BY timestamp", (user, day)))
     seen_files = set(Q("SELECT DISTINCT resource FROM access WHERE user=? AND date<?", (user, day))["resource"])
@@ -91,14 +100,16 @@ def page_activity():
     # ---------------------------------------------------------------- headline numbers
     st.markdown(f"**{user} on {day}** - daily risk **{risk.get(day, 0):.0f}**"
                 + (" · raised an alert" if day in alert_days else ""))
-    m = st.columns(7)
-    _metric(m[0], "Pages visited", tv("pages_visited"), _usual(base, "pages_visited"))
-    _metric(m[1], "Sites", tv("distinct_domains"), _usual(base, "distinct_domains"))
-    _metric(m[2], "Downloads", tv("downloads"), _usual(base, "downloads"))
-    _metric(m[3], "Blocked attempts", tv("web_blocked"), _usual(base, "web_blocked"))
-    _metric(m[4], "Files opened", tv("access_events"), _usual(base, "access_events"))
-    _metric(m[5], "Sensitive files", tv("sensitive_access"), _usual(base, "sensitive_access"))
-    _metric(m[6], "MB uploaded", tv("bytes_out_mb"), _usual(base, "bytes_out_mb"), "{:,.1f}")
+    m = st.columns(4)
+    _metric(m[0], "Minutes online", tv("browsing_minutes"), _usual(base, "browsing_minutes"))
+    _metric(m[1], "Websites", float(net["site"].nunique()) if len(net) else 0.0, _usual(base, "distinct_domains"))
+    _metric(m[2], "Pages visited", tv("pages_visited"), _usual(base, "pages_visited"))
+    _metric(m[3], "Downloads", tv("downloads"), _usual(base, "downloads"))
+    m = st.columns(4)
+    _metric(m[0], "Blocked attempts", tv("web_blocked"), _usual(base, "web_blocked"))
+    _metric(m[1], "Files opened", tv("access_events"), _usual(base, "access_events"))
+    _metric(m[2], "Sensitive files", tv("sensitive_access"), _usual(base, "sensitive_access"))
+    _metric(m[3], "MB uploaded", tv("bytes_out_mb"), _usual(base, "bytes_out_mb"), "{:,.1f}")
 
     # ---------------------------------------------------------------- flagged tables
     if len(net):
@@ -106,7 +117,7 @@ def page_activity():
         net["page"] = net["url"].where(net["url"] != "", net["domain"])
         net["MB down"] = (net["bytes_in"].astype(float) / 1e6).round(2)
         net["MB up"] = (net["bytes_out"].astype(float) / 1e6).round(2)
-        net["flag"] = _net_flags(net, seen_sites)
+        net["flag"] = _net_flags(net, seen_sites, seen_hosts)
     if len(acc):
         acc["time"] = pd.to_datetime(acc["timestamp"]).dt.strftime("%H:%M:%S")
         new = ~acc["resource"].isin(seen_files) & ~acc.duplicated("resource")
@@ -119,9 +130,12 @@ def page_activity():
     if len(au):
         au["time"] = pd.to_datetime(au["timestamp"]).dt.strftime("%H:%M:%S")
 
-    tabs = st.tabs(["Story", "Web browsing", "Downloads", "Blocked attempts", "Files", "Logins"])
+    tabs = st.tabs(["Story", "Websites", "Web browsing", "Downloads", "Blocked attempts", "Files", "Logins"])
     with tabs[0]:
         _story(net, acc, au)
+    with tabs[1]:
+        _websites(user, day, net, seen_sites, seen_hosts, meta)
+    tabs = tabs[1:]
     with tabs[1]:
         if not len(net):
             st.info("No web or network activity recorded for this day.")
@@ -130,8 +144,8 @@ def page_activity():
             with l:
                 only = st.toggle("Only flagged", key="web_only_flagged")
                 v = net[net["flag"] != ""] if only else net
-                st.dataframe(v[["time", "domain", "page", "category", "web_action", "MB down", "MB up", "flag"]]
-                             .rename(columns={"domain": "site", "web_action": "result"}),
+                st.dataframe(v[["time", "site", "host", "page", "category", "web_action", "MB down", "MB up", "flag"]]
+                             .rename(columns={"host": "subdomain", "web_action": "result"}),
                              hide_index=True, height=420)
             with r:
                 _category_chart(user, day, net, meta)
@@ -166,11 +180,13 @@ def page_activity():
                          hide_index=True)
 
 
-def _net_flags(net: pd.DataFrame, seen_sites: set) -> pd.Series:
+def _net_flags(net: pd.DataFrame, seen_sites: set, seen_hosts: set) -> pd.Series:
     risky = web.is_risky(net["category"])
+    new_site = ~net["site"].isin(seen_sites)
     return _flags(net, [
         (net["web_action"] == "blocked", "blocked"),
-        (~net["domain"].isin(seen_sites) & ~net.duplicated("domain"), "new site"),
+        (new_site & ~net.duplicated("site"), "new site"),
+        (~new_site & (net["url"] != "") & ~net["host"].isin(seen_hosts) & ~net.duplicated("host"), "new subdomain"),
         (risky, net["category"] + " site"),
         (web.is_executable(net["file"]) & (net["web_action"] == "allowed"), "executable"),
         (net["MB up"] >= LARGE_UPLOAD_MB, "large upload")])
@@ -221,6 +237,67 @@ def _story(net: pd.DataFrame, acc: pd.DataFrame, au: pd.DataFrame):
                "download, a sensitive file or a large upload.")
     st.dataframe(out.style.apply(lambda r: ["background-color: rgba(235,104,52,.12)" if r["flag"] else ""] * len(r),
                                  axis=1), hide_index=True, height=480, width="stretch")
+
+
+def _websites(user: str, day: str, net: pd.DataFrame, seen_sites: set, seen_hosts: set, meta: dict):
+    """One row per website: its subdomains, estimated time spent, requests, data and anything unusual."""
+    if not len(net):
+        st.info("No web activity recorded for this day.")
+        return
+    n = net.assign(timestamp=pd.to_datetime(net["timestamp"]))
+    t = web.time_on_sites(n).set_index("site")
+    sig = web.site_signals(n).set_index("site")
+    rows = []
+    for site, g in n.groupby("site"):
+        hosts = sorted(set(g["host"]))
+        subs = ", ".join(h + (" (new)" if site in seen_sites and h not in seen_hosts and (g["url"] != "").any() else "")
+                         for h in hosts)
+        flags = []
+        if site not in seen_sites:
+            flags.append("new site")
+        elif any(h not in seen_hosts for h in hosts) and (g["url"] != "").any():
+            flags.append("new subdomain")
+        if (g["web_action"] == "blocked").any():
+            flags.append(f"{int((g['web_action'] == 'blocked').sum())} blocked")
+        cat = g["category"].iloc[0]
+        if web.is_risky(pd.Series([cat])).iloc[0]:
+            flags.append(cat + " site")
+        if site in sig.index and sig.at[site, "random_hosts"] >= 30:
+            flags.append(f"{int(sig.at[site, 'random_hosts'])} random subdomains")
+        if site in sig.index and sig.at[site, "clockwork"] and site not in seen_sites:
+            flags.append("clockwork requests")
+        if g["MB up"].sum() >= LARGE_UPLOAD_MB:
+            flags.append("large upload")
+        rows.append(dict(website=site, subdomains=subs if len(subs) < 160 else f"{len(hosts)} subdomains, e.g. "
+                         + ", ".join(hosts[:3]), minutes=float(t["minutes"].get(site, 0.0)) if len(t) else 0.0,
+                         visits=int(t["visits"].get(site, 0)) if len(t) else 0, requests=len(g),
+                         pages=g.loc[g["url"] != "", "url"].nunique(), category=cat,
+                         **{"MB down": round(g["MB down"].sum(), 1), "MB up": round(g["MB up"].sum(), 1)},
+                         flag=", ".join(flags)))
+    tab = pd.DataFrame(rows).sort_values(["minutes", "requests"], ascending=False)
+    tab = tab[["website", "minutes", "visits", "flag", "subdomains", "MB down", "MB up", "requests", "pages", "category"]]
+    st.caption("Time is estimated from the proxy log the way web-analytics tools do it: requests to a site less than 5 "
+               "minutes apart form one visit, from the first to the last request plus a minute of reading.")
+    st.dataframe(tab.style.format({"minutes": "{:.0f}", "MB down": "{:,.1f}", "MB up": "{:,.1f}"})
+                 .apply(lambda x: ["background-color: rgba(235,104,52,.12)" if x["flag"] else ""] * len(x), axis=1),
+                 hide_index=True, height=min(440, 38 + 35 * len(tab)), width="stretch",
+                 column_config={"flag": st.column_config.TextColumn(width="large"),
+                                "subdomains": st.column_config.TextColumn(width="large")})
+    hist = Q(f"SELECT {_net_select(['timestamp', 'url', 'domain', 'web_action', 'user'])} FROM network "
+             "WHERE user=? AND date>=? AND date<?", (user, meta.get("train_start", ""), meta.get("train_end", "")))
+    usual = pd.Series(dtype=float)
+    if len(hist):
+        hist = web.enrich(hist.assign(timestamp=pd.to_datetime(hist["timestamp"])))
+        th = web.time_on_sites(hist)
+        if len(th):
+            usual = th.groupby("site")["minutes"].sum() / max(1, th["date"].nunique())
+    top = tab.head(10)
+    fig = go.Figure()
+    fig.add_bar(x=top["website"], y=[usual.get(s_, 0) for s_ in top["website"]], name="usual minutes / day",
+                marker_color=BLUE)
+    fig.add_bar(x=top["website"], y=top["minutes"], name=f"minutes on {day}", marker_color=ORANGE)
+    fig.update_layout(title="Minutes per website: this day vs usual", barmode="group", yaxis_title="minutes")
+    show(style(fig, 320), key="activity_sites")
 
 
 def _category_chart(user: str, day: str, net: pd.DataFrame, meta: dict):

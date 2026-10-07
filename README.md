@@ -51,7 +51,7 @@ Other commands:
 | `python -m ueba.agent --url http://127.0.0.1:8600 --workspace lab --token …` | stream a machine's telemetry to the API |
 | `python -m ueba.replay --workspace NAME [--url … --token …]` | replay a dataset as a live feed |
 | `python experiments.py` | robustness (5 seeds) + ablation study → `reports/experiments.md` |
-| `python -m pytest -q` | 34 unit + integration tests |
+| `python -m pytest -q` | 35 unit + integration tests |
 | `python experiments_cert.py` | CERT r4.2 benchmark, both variants + held-out split → `reports/cert_r4.2.md` |
 
 ---
@@ -62,12 +62,12 @@ Other commands:
 |---|---|---|
 | **Capture** authentication logs | `ueba/generator.py`, `ueba/ingest.py` | interactive, VPN, SSH, RDP, Kerberos logins with source IP, device and geo-location |
 | **Capture** system-access logs | same | file / application / privileged-command access with data-sensitivity labels |
-| **Capture** network and web logs | same + `ueba/web.py` | outbound connections (domain, port, bytes in/out) and, from a web proxy / gateway, the page visited, site category, allowed or blocked, and downloaded files |
+| **Capture** network and web logs | same + `ueba/web.py` | outbound connections (domain, port, bytes in/out) and, from a web proxy / gateway, the page and subdomain visited (erp.ibm.com under ibm.com), site category, allowed or blocked, downloaded files and estimated time spent per website |
 | **Capture** resource-usage logs | same + `ueba/collector.py` | hourly CPU / memory / disk / process samples; **live capture from the real host** via psutil |
 | **Behavioural profiles** for users *and* devices | `ueba/features.py`, `ueba/profiles.py` | 44 user features (+7 web-activity features when proxy logs are present) and 19 device features per day; personal baseline, department peer baseline, usual hours, hosts, countries, domains |
-| **Identify deviations** | `ueba/detectors.py` | robust z-scores (personal + peer), ML ensemble (Isolation Forest, LOF, Autoencoder), 26 MITRE-mapped threat rules |
+| **Identify deviations** | `ueba/detectors.py` | robust z-scores (personal + peer), ML ensemble (Isolation Forest, LOF, Autoencoder), 28 MITRE-mapped threat rules (incl. web-filter bypass, tool downloads, random-subdomain tunnelling and clockwork beaconing) |
 | **Risk-based alerts** | `ueba/risk.py` | fused 0-100 daily risk, decaying accumulated entity risk, severity, plain-English reasons, MITRE ATT&CK tags |
-| Presentation | `dashboard/` | Streamlit SOC console: overview, cases & alert triage, entity investigation, **user activity** (what a person browsed, downloaded, was blocked from and opened, with the out-of-character steps flagged), model performance, data sources, live monitor, log explorer, administration; refreshes live |
+| Presentation | `dashboard/` | Streamlit SOC console: overview, cases & alert triage, entity investigation, **user activity** (what a person browsed - websites, subdomains and minutes on each - downloaded, was blocked from and opened, with the out-of-character steps flagged), model performance, data sources, live monitor, log explorer, administration; refreshes live |
 | Analyst workflow | `ueba/cases.py` | alerts grouped into cases (status, assignee, notes); suppression of known-benign patterns with expiry and reason; CSV export |
 | Bring your own logs | `ueba/sources.py`, `ueba/workspace.py` | upload CSV/JSON/ZIP exports, automatic log-type detection and column mapping, per-dataset workspaces with a learning → monitoring lifecycle |
 | Continuous operation | `ueba/service.py`, `ueba/api.py`, `ueba/agent.py` | drop-folder + HTTP ingest API + endpoint agent; incremental scoring with saved models; runs unattended |
@@ -280,7 +280,7 @@ older than the newest data) stay quiet; every attempt, including failures, is lo
 | Precision / Recall / F1 | **0.935 / 0.967 / 0.951** |
 | False-positive rate | 0.09 % of normal entity-days (2 false alerts in 30 days) |
 | Alerts per day | ~1.0 for 108 monitored entities |
-| Fused ROC-AUC / PR-AUC | 1.000 / 0.996 |
+| Fused ROC-AUC / PR-AUC | 1.000 / 0.998 |
 
 **Robustness over 5 different simulated companies:** mean precision 0.923, recall 0.967, F1 0.945,
 12/12 incidents detected every time (`reports/experiments.md`).
@@ -378,7 +378,7 @@ InHouse Project/
 
 ## 6. Testing
 
-`python -m pytest -q` - 34 tests, ~55 s:
+`python -m pytest -q` - 35 tests, ~55 s:
 
 * **Detection** - haversine / impossible travel, hour rarity, deviation scoring, rules, risk fusion
   bounds, full pipeline catches the planted attacks with FPR < 2 %, no attacks in the baseline window,
