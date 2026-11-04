@@ -97,6 +97,14 @@ def score_entities(feats: pd.DataFrame, cols: list, etype: str, train_start: str
             .fillna(0).round(1).to_numpy()
         F["baseline_risky"] = F["entity"].map(F.loc[train_mask].groupby("entity")["risky_site_visits"].sum()) \
             .fillna(0).to_numpy()
+    # admin rights, admin shares, risky PowerShell and printing: what is routine for this account
+    for name, src in (("baseline_privileged", ["admin_logons", "runas_events"]),
+                      ("baseline_admin_share", ["admin_share_access"]), ("baseline_ps_suspicious", ["ps_suspicious"])):
+        if all(c in F for c in src):
+            F[name] = F["entity"].map(F.loc[train_mask].groupby("entity")[src].sum().sum(axis=1)).fillna(0).to_numpy()
+    if "pages_printed" in F:
+        F["baseline_pages"] = F["entity"].map(F.loc[train_mask].groupby("entity")["pages_printed"].mean()) \
+            .fillna(0).round(0).to_numpy()
     rule, hits = det.apply_rules(F, etype, cfg.disabled_rules)
 
     def zfor(idx):

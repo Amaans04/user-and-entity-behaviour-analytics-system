@@ -108,20 +108,22 @@ def live_watch():
     st.session_state[key] = sig
 
 
+_ai = ui.ai_status()
+st.sidebar.caption(f"AI assistant: {_ai['model']} (local)" if _ai["ready"] else "AI assistant: offline")
 with st.sidebar:
     st.toggle("Live refresh", key="live_on", value=True,
               help="Refresh automatically when new data is analysed (checks every 5 s)")
     live_watch()
-st.sidebar.divider()
 
 # ---------------------------------------------------------------- context for the views
 if has_results:
     ctx.meta = dict(Q("SELECT key, value FROM meta").values)
     m = ctx.meta
-    st.sidebar.markdown(f"**Baseline:** {m.get('train_start')} → {m.get('train_end')}  \n"
-                        f"**Data until:** {m.get('last_day')}  \n"
-                        f"**Log streams:** {m.get('streams', 'auth,access,network,resource').replace(',', ', ')}  \n"
-                        f"**Alert threshold:** {float(m.get('alert_threshold', 45)):.0f}/100")
+    with st.sidebar.expander("Dataset details"):
+        st.markdown(f"**Baseline:** {m.get('train_start')} → {m.get('train_end')}  \n"
+                    f"**Data until:** {m.get('last_day')}  \n"
+                    f"**Log streams:** {m.get('streams', 'auth,access,network,resource').replace(',', ', ')}  \n"
+                    f"**Alert threshold:** {float(m.get('alert_threshold', 45)):.0f}/100")
     ctx.scores = Q("SELECT * FROM scores")
     ctx.alerts = Q("SELECT * FROM alerts")
     ctx.has_truth = table_exists("ground_truth") and ctx.scores["label"].notna().any()

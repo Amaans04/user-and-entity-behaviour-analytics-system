@@ -65,7 +65,7 @@ Other commands:
 | **Capture** network and web logs | same + `ueba/web.py` | outbound connections (domain, port, bytes in/out) and, from a web proxy / gateway, the page and subdomain visited (erp.ibm.com under ibm.com), site category, allowed or blocked, downloaded files and estimated time spent per website |
 | **Capture** resource-usage logs | same + `ueba/collector.py` | hourly CPU / memory / disk / process samples; **live capture from the real host** via psutil |
 | **Behavioural profiles** for users *and* devices | `ueba/features.py`, `ueba/profiles.py` | 44 user features (+7 web-activity features when proxy logs are present) and 19 device features per day; personal baseline, department peer baseline, usual hours, hosts, countries, domains |
-| **Identify deviations** | `ueba/detectors.py` | robust z-scores (personal + peer), ML ensemble (Isolation Forest, LOF, Autoencoder), 28 MITRE-mapped threat rules (incl. web-filter bypass, tool downloads, random-subdomain tunnelling and clockwork beaconing) |
+| **Identify deviations** | `ueba/detectors.py` | robust z-scores (personal + peer), ML ensemble (Isolation Forest, LOF, Autoencoder), 33 MITRE-mapped threat rules (incl. web-filter bypass, tool downloads, random-subdomain tunnelling, clockwork beaconing, first-time admin rights, admin-share access, shared-folder sweeps, unusual print volume and suspicious PowerShell) |
 | **Risk-based alerts** | `ueba/risk.py` | fused 0-100 daily risk, decaying accumulated entity risk, severity, plain-English reasons, MITRE ATT&CK tags |
 | Presentation | `dashboard/` | Streamlit SOC console: overview, cases & alert triage, entity investigation, **user activity** (what a person browsed - websites, subdomains and minutes on each - downloaded, was blocked from and opened, with the out-of-character steps flagged), model performance, data sources, live monitor, log explorer, administration; refreshes live |
 | Analyst workflow | `ueba/cases.py` | alerts grouped into cases (status, assignee, notes); suppression of known-benign patterns with expiry and reason; CSV export |
@@ -198,6 +198,20 @@ Trained only on baseline behaviour (unsupervised - no attack labels are used for
 Each score is calibrated against its own baseline distribution (1.0 = 99th percentile of normal) and
 the three are averaged.
 
+### 3.4.1 Local AI assistant (optional)
+
+A language model running **locally through Ollama** (default `qwen2.5:7b`, set under
+Administration → AI assistant) explains what the detectors found. It never raises, scores or closes alerts.
+
+* **Alerts:** "Summarise this case with AI" writes what happened, how serious it looks (with an innocent
+  explanation to rule out) and 3-5 next steps, built only from the alert reasons, ATT&CK techniques and detector scores.
+* **User activity → PowerShell / Admin rights:** "Explain this command" says what a logged command does,
+  which attacker technique it resembles and what to check.
+
+No log data leaves the machine. Log text is fenced off in the prompt so instructions hidden in a log are
+treated as data. Answers are cached in `data/llm_cache.db`. If Ollama isn't running, the panels are
+hidden and everything else works unchanged (`ueba/llm.py`, `tests/test_llm.py`).
+
 ### 3.5 Risk scoring & alerts
 
 ```
@@ -227,7 +241,7 @@ mapping, value normalisation, de-duplicated append):
 | Route | For | How |
 |---|---|---|
 | Upload | one-off exports | Data sources → Add logs: auto-detects the log type and maps columns (`TimeCreated` → timestamp, `TargetUserName` → user, `cs_bytes` → bytes_out …), preview before import, mapping remembered for files with the same columns |
-| Text and Windows logs | Linux / Windows | Linux `auth.log` / syslog text, Windows Event Viewer CSV, PowerShell exports and raw `.evtx` are read directly; a file mixing several event types is split by its event-type column |
+| Text and Windows logs | Linux / Windows | Linux `auth.log` / syslog text, Windows Event Viewer CSV, PowerShell exports and raw `.evtx` are read directly - Security, PowerShell, PrintService and **Sysmon** (process starts, network connections, files created, DNS queries) - including USB devices (6416, DriverFrameworks 2003, Linux kernel lines), admin logons and run-as (4672, 4648), shared folders (5140, 5145), print jobs (PrintService 307, print-server CSV) and PowerShell commands (4103, 4104, 800, 4688 command lines); a file mixing several event types is split by its event-type column |
 | Web proxy logs | Squid / gateways | Squid `access.log` and web-gateway CSV exports (Zscaler-style columns): full URL, site category, allowed / blocked (TCP_DENIED, 403, Blocked), downloads; categories fall back to a built-in list of well-known sites |
 | Drop folder | export jobs, `rsync`, SIEM forwarders | copy files into `data/workspaces/<id>/inbox/`; `auth__x.csv` forces the stream; bad files go to `inbox/failed/` with an `.error.txt` |
 | Ingest API | agents, scripts, log shippers | `POST /api/v1/workspaces/<id>/ingest/<stream>` with `Authorization: Bearer <token>`; JSON, JSON-lines or CSV; returns `202` and queues the batch in the inbox |
@@ -282,17 +296,17 @@ older than the newest data) stay quiet; every attempt, including failures, is lo
 | Alerts per day | ~1.0 for 108 monitored entities |
 | Fused ROC-AUC / PR-AUC | 1.000 / 0.998 |
 
-**Robustness over 5 different simulated companies:** mean precision 0.923, recall 0.967, F1 0.945,
+**Robustness over 5 different simulated companies:** mean precision 0.918, recall 0.967, F1 0.942,
 12/12 incidents detected every time (`reports/experiments.md`).
 
 **Ablation (what each layer adds, mean of 5 seeds):**
 
 | Variant | PR-AUC | F1 |
 |---|---|---|
-| Full system | 0.996 | 0.945 |
-| Behaviour only (no rules) | 0.953 | 0.854 |
-| ML ensemble only | 0.917 | 0.856 |
-| Personal baseline only | 0.487 | 0.468 |
+| Full system | 0.996 | 0.942 |
+| Behaviour only (no rules) | 0.954 | 0.854 |
+| ML ensemble only | 0.927 | 0.863 |
+| Personal baseline only | 0.489 | 0.468 |
 | Threat rules only | 0.967 | 0.983 |
 
 **Honest interpretation (synthetic):** rules score very high because they were written for these known attack
@@ -378,7 +392,7 @@ InHouse Project/
 
 ## 6. Testing
 
-`python -m pytest -q` - 35 tests, ~55 s:
+`python -m pytest -q` - 38 tests, ~55 s:
 
 * **Detection** - haversine / impossible travel, hour rarity, deviation scoring, rules, risk fusion
   bounds, full pipeline catches the planted attacks with FPR < 2 %, no attacks in the baseline window,
@@ -406,7 +420,8 @@ InHouse Project/
 
 ## 8. Tech stack
 
-Python · pandas · NumPy · scikit-learn · SQLite · Streamlit · Plotly · Matplotlib · psutil · pytest
+Python · pandas · NumPy · scikit-learn · SQLite · Streamlit · Plotly · Matplotlib · psutil · pytest ·
+Ollama (optional local language model for explanations)
 (the service, API, agent and notifications use only the standard library).
 
 **On-the-spot datasets:** see `docs/PANEL_DATA_PLAYBOOK.md` and the practice packs built by `python docs/data/make_rehearsal.py`.

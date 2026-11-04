@@ -16,11 +16,29 @@ import streamlit as st
 
 from dashboard.ui import *  # noqa: F401,F403 - palette, chart helpers, ctx, queries
 from dashboard.ui import ctx
-from ueba import auth, cases, feedback
+from ueba import auth, cases, feedback, llm
 
 STATUS_ICON = {"open": "open", "investigating": "investigating", "closed - benign": "closed - benign",
                "closed - threat": "closed - threat", "confirmed threat": "confirmed threat",
                "suppressed": "suppressed"}
+
+
+def _ai_facts(rows: pd.DataFrame) -> list[dict]:
+    """The detector findings for these alerts, as the AI assistant's only source of facts."""
+    out = []
+    for _, r in rows.iterrows():
+        out.append(dict(date=r["date"], title=r["title"], severity=r["severity"], risk_score=r["risk_score"],
+                        reasons=json.loads(r["reasons"]) if isinstance(r["reasons"], str) else [],
+                        mitre=json.loads(r["mitre"]) if isinstance(r["mitre"], str) else [],
+                        stat=r.get("stat"), peer=r.get("peer"), ml=r.get("ml"), rule=r.get("rule")))
+    return out
+
+
+def ai_summary(rows: pd.DataFrame, key: str, what: str = "case"):
+    first = rows.iloc[0]
+    st.markdown(f"**AI {what} summary**")
+    prompt = llm.case_prompt(first["entity"], first["entity_type"], first.get("department", ""), _ai_facts(rows))
+    ai_panel(prompt, f"{what}_summary", key, button=f"Summarise this {what} with AI")
 
 
 def detector_bar(row) -> go.Figure:
@@ -145,6 +163,7 @@ def cases_tab(alerts):
                 f"{sev_badge(case['severity'])} &nbsp; {STATUS_ICON[case['status']]} · {case['alerts']} alert(s) · "
                 f"peak risk {case['max_risk']:.0f} · assignee **{case['assignee'] or '—'}**",
                 unsafe_allow_html=True)
+    ai_summary(CA, f"case_{case['case_id']}")
     left, right = st.columns([3, 2])
     with left:
         tl = CA[["date", "title", "severity", "risk_score", "status"]].copy()
@@ -234,6 +253,7 @@ def alerts_tab(alerts):
     row = A.iloc[sel[0]] if sel else A.iloc[0]
     st.divider()
     alert_detail(row, f"all_{row['alert_id']}")
+    ai_summary(A[A["alert_id"] == row["alert_id"]], f"alert_{row['alert_id']}", what="alert")
     if not can("triage"):
         return
     st.markdown("**Verdict for this day**")

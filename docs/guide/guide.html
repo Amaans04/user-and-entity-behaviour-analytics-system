@@ -131,7 +131,7 @@
     <li><b>Profiles</b> 44 features per user-day (+7 for web activity) and 19 per device-day against each entity's own history and its
       department, adapting over time but never learning suspicious days.</li>
     <li><b>Detects</b> deviations with three independent layers - robust statistics, an unsupervised ML ensemble
-      (Isolation Forest, LOF, autoencoder) and 28 MITRE ATT&amp;CK rules - fused into one 0-100 risk score that needs
+      (Isolation Forest, LOF, autoencoder) and 33 MITRE ATT&amp;CK rules - fused into one 0-100 risk score that needs
       corroboration before it alerts.</li>
     <li><b>Operates</b> continuously: a collector service scores only new data with saved models (identical to a full
       re-run), notifies analysts, groups alerts into cases, and the console is protected by roles and an audit trail.</li>
@@ -261,7 +261,7 @@
       as benign always are.</dd></dl></div>
   <div class="feature"><h3>Three detection layers <span class="where">ueba/detectors.py</span></h3><dl>
     <dt>What</dt><dd>Statistics (largest z-scores above 3), an unsupervised ML ensemble (Isolation Forest, LOF, autoencoder)
-      trained on normal days only, and 28 rules mapped to ATT&amp;CK.</dd>
+      trained on normal days only, and 33 rules mapped to ATT&amp;CK.</dd>
     <dt class="why">Why</dt><dd>They fail differently: statistics explain, ML finds patterns nobody wrote a rule for, rules are
       precise for known techniques. No labels are needed - real organisations don't have them.</dd>
     <dt>How</dt><dd>Each ML score is calibrated so 1.0 = the 99th percentile of normal, then averaged.</dd></dl></div>
@@ -280,10 +280,24 @@
       request + 1 min), giving minutes per website and minutes online vs usual. Two rules use them: hundreds of
       random-looking subdomains of one site (tunnelling, T1071.004) and a new site hit at clockwork intervals all day
       (malware beaconing, T1071.001).</dd></dl></div>
+  <div class="feature"><h3>USB, admin rights, shared folders, printing, PowerShell <span class="where">ueba/parsers.py · features.py · detectors.py</span></h3><dl>
+    <dt>What</dt><dd>13 signals per user-day: USB devices connected, never-seen devices and files copied; logons with admin
+      privileges and commands run as another account; shared folders used, never-used folders and hidden admin shares
+      (C$, ADMIN$); print jobs, pages and off-hours jobs; PowerShell commands and suspicious ones. Five rules, each judged
+      against the account's own history: first-time admin rights (R24, T1078.002), admin shares (R25, T1021.002), four or
+      more new shared folders in a day (R26, T1135), print volume five times the usual (R27), suspicious PowerShell
+      (R28, T1059.001).</dd>
+    <dt class="why">Why</dt><dd>These are the ways data and control actually leave a desk - on a stick, on paper, through
+      someone else's rights - and each is already in logs an organisation keeps.</dd>
+    <dt>How</dt><dd>Windows events 6416 / 2003 (USB), 4672 / 4648 (admin rights), 5140 / 5145 (shares), PrintService 307 or a
+      print server's job list, 4103 / 4104 / 800 and 4688 command lines (PowerShell); Linux sudo and kernel USB lines.
+      A USB or script-block event is logged under the computer, so it goes to whoever last logged on there, then the
+      device owner, else it is dropped. Kept out of the ML models, like the web signals, so the model is the same
+      whatever logs arrive. On the simulated company the five rules fire on nine user-days, all attack days.</dd></dl></div>
   <div class="feature"><h3>Rule R16 - removable media without history <span class="where">ueba/detectors.py</span></h3><dl>
     <dt>What</dt><dd>USB use by an account that never used removable media in its learning period (T1052.001).</dd>
     <dt class="why">Why</dt><dd>Added after CERT showed quiet insiders slip through; a standard insider indicator. Chosen on a
-      development half only; raised held-out detection from 3/36 to 22/36; never fires on the simulated company.</dd></dl></div>
+      development half only; raised held-out detection from 3/36 to 22/36; on the simulated company it fires only on the slow insider's USB days.</dd></dl></div>
   <div class="feature"><h3>Risk fusion and corroboration <span class="where">ueba/risk.py</span></h3><dl>
     <dt>What</dt><dd>A = 1 - (1-0.28·stat)(1-0.10·peer)(1-0.30·ml)(1-rules); daily risk = 100·min(1, A·criticality).</dd>
     <dt class="why">Why</dt><dd>One number to rank by, weighted by impact (admins, servers ×1.3). The threshold 45 is above
@@ -335,8 +349,8 @@
   <div class="feature"><h3>User activity page <span class="where">dashboard/views/activity.py</span></h3><dl>
     <dt>What</dt><dd>For any person and day: a Websites tab (each site, its subdomains, minutes, visits, data in / out,
       flags, minutes vs usual) and one story of logins, pages, downloads, blocked attempts and files, routine
-      repeats folded, and every step that is new or risky for that person flagged; tabs per kind; today vs usual numbers
-      and kinds of site.</dd>
+      repeats folded, and every step that is new or risky for that person flagged; tabs per kind, including USB, Admin
+      rights, Shared folders, Printing and PowerShell; today vs usual numbers and kinds of site.</dd>
     <dt class="why">Why</dt><dd>A risk score says how unusual a day was; an analyst (and a panel) needs to see what happened.
       Opened from any alert with "What they did".</dd></dl></div>
   <div class="feature"><h3>Investigation, performance and log pages <span class="where">dashboard/views/</span></h3><dl>
@@ -383,6 +397,10 @@
   <figure class="shot"><img src="../../report/screens/06_websites.png" alt="Websites">
     <figcaption>User activity → Websites - every site with its subdomains (docs. / mail. / www.google.com), estimated
       minutes and visits, data in / out and flags; minutes per site compared with the person's usual.</figcaption></figure>
+  <figure class="shot"><img src="../../report/screens/08_printing.png" alt="Printing">
+    <figcaption>User activity → Printing - the slow insider on day five: 25 USB events and 248 pages printed against a
+      usual 8; the large and confidential jobs are flagged. USB, Admin rights, Shared folders and PowerShell have their
+      own tabs.</figcaption></figure>
   <figure class="shot"><img src="../../report/screens/04_collection.png" alt="Data sources">
     <figcaption>Data sources → Automatic collection - service status, the drop folder, the ingest API, the agent and replay
       commands; notifications and settings below.</figcaption></figure>
@@ -404,11 +422,11 @@
     <tr><th>Measure</th><th class="n">Value</th></tr>
     <tr><td>Incidents detected</td><td class="n">12 / 12, each on the first day</td></tr>
     <tr><td>Precision / recall / F1</td><td class="n">0.935 / 0.967 / 0.951 (TP 29, FP 2, FN 1)</td></tr>
-    <tr><td>False positive rate · alerts per day</td><td class="n">0.04 % · about 0.9</td></tr>
-    <tr><td>Five different organisations (mean F1)</td><td class="n">0.945, 60 / 60 incidents</td></tr>
+    <tr><td>False positive rate · alerts per day</td><td class="n">0.09 % · about 1.0</td></tr>
+    <tr><td>Five different organisations (mean F1)</td><td class="n">0.942, 60 / 60 incidents</td></tr>
     <tr><td>Behavioural layers only, no rules (F1)</td><td class="n">0.854</td></tr>
   </table>
-  <p>The one false positive is a planted harmless oddity (a new project, risk 49); the one false negative is the pivot
+  <p>The two false positives are planted harmless oddities (a new project and a 20 GB backup, risk 49); the one false negative is the pivot
     laptop of the lateral movement (43.6, just below 45). Rules alone score F1 0.983 only because they were written for these
     attack types - the behavioural layers reach 0.854 without knowing the attacks.</p>
   <h2>Live operation</h2>
@@ -444,13 +462,13 @@ python -m ueba.replay --workspace live-demo --labels      # stream the company l
 python -m ueba.agent --url http://127.0.0.1:8600 --workspace lab --token ueba_...
 python run_pipeline.py --cert data/cert/r4.2              # CERT benchmark into its own workspace (~8 min)
 python experiments.py · experiments_cert.py · experiments_trend.py   # robustness / CERT / trend experiments
-python -m pytest -q                    # 35 tests</pre>
+python -m pytest -q                    # 38 tests</pre>
   <table>
     <tr><th style="width:30%">File</th><th>Responsibility</th></tr>
     <tr><td><code>ueba/generator.py</code></td><td>Simulated company, planted attacks, ground truth</td></tr>
     <tr><td><code>ueba/sources.py · ingest.py</code></td><td>Log-type detection, column mapping, normalisation, storage</td></tr>
     <tr><td><code>ueba/features.py · profiles.py</code></td><td>Behavioural features; personal and peer baselines</td></tr>
-    <tr><td><code>ueba/detectors.py · risk.py</code></td><td>Statistics, ML ensemble, 28 rules, explanations; risk fusion, alerts</td></tr>
+    <tr><td><code>ueba/detectors.py · risk.py</code></td><td>Statistics, ML ensemble, 33 rules, explanations; risk fusion, alerts</td></tr>
     <tr><td><code>ueba/pipeline.py</code></td><td>Full training run or incremental update; adaptive baseline with quarantine</td></tr>
     <tr><td><code>ueba/workspace.py</code></td><td>Workspaces, inbox, locking, learning → monitoring lifecycle</td></tr>
     <tr><td><code>ueba/service.py · api.py · agent.py · replay.py</code></td><td>Collector service; ingest API; endpoint agent; live replay</td></tr>
@@ -458,7 +476,7 @@ python -m pytest -q                    # 35 tests</pre>
     <tr><td><code>ueba/auth.py</code></td><td>Users, roles, password hashing, API tokens, audit log</td></tr>
     <tr><td><code>ueba/cert_loader.py · evaluate.py</code></td><td>CERT adapter; metrics, figures, reports</td></tr>
     <tr><td><code>dashboard/app.py · ui.py · views/</code></td><td>Console shell; per-session context; one module per page</td></tr>
-    <tr><td><code>tests/</code></td><td>35 tests: detection, ingestion, web activity, incremental equivalence, API, security, cases, service</td></tr>
+    <tr><td><code>tests/</code></td><td>38 tests: detection, ingestion, web and user activity, incremental equivalence, API, security, cases, service</td></tr>
   </table>
 </div>
 
@@ -504,8 +522,8 @@ python -m pytest -q                    # 35 tests</pre>
       That's why I ran CERT, which CMU built: 3/36 out of the box, 22/36 with one generic indicator chosen on a separate half.
       The synthetic 0.951 is an upper bound.</div>
     <div class="qa"><b>Isn't adding R16 after seeing CERT tuning on the test set?</b>I split the users first, chose R16 on the
-      development half (4 → 17) and quote the untouched test half (3 → 22). It's a standard indicator and never fires on
-      the synthetic data. The out-of-the-box number is reported as the generalisation result.</div>
+      development half (4 → 17) and quote the untouched test half (3 → 22). It's a standard indicator and on the synthetic
+      data fires only on the slow insider's own USB days. The out-of-the-box number is reported as the generalisation result.</div>
     <div class="qa"><b>Rules alone score 0.98 - why the ML?</b>Because I wrote those rules for the attacks I also simulated.
       Without rules the behavioural layers still reach F1 0.854 with no knowledge of the attacks.</div>
     <div class="qa"><b>Can an attacker poison the baseline?</b>Risky days (≥ 60), rule hits and confirmed threats are never
@@ -522,6 +540,9 @@ python -m pytest -q                    # 35 tests</pre>
       sequence-aware scoring.</div>
     <div class="qa"><b>How do you avoid alert fatigue?</b>Corroboration threshold, explanations, cases instead of repeated
       alerts, suppression with expiry, notifications only for new or escalated alerts.</div>
+    <div class="qa"><b>Windows logs a USB stick under the computer - how do you know who it was?</b>The event goes to
+      whoever last logged on to that computer in the same log, then to the device's owner in the asset list, then to its
+      usual user. If none is known it is dropped, not guessed.</div>
     <div class="qa"><b>What would a real deployment need?</b>TLS via a reverse proxy, the service as a system service, native
       EVTX / syslog parsers, PostgreSQL at scale, and SOAR for automated response.</div>
   </div>
@@ -534,9 +555,9 @@ python -m pytest -q                    # 35 tests</pre>
     <li>The agent can't measure bytes per connection; upload volumes and pages come from proxy / firewall logs, and HTTPS pages
       are visible only where the proxy inspects TLS.</li>
   </ul>
-  <div class="callout ok"><b>Cheat sheet.</b> 205,881 events · 108 entities · 44 (+7 web) + 19 features · 3 layers · 28 rules ·
-    threshold 45 (stats max 43.8) · F1 0.951 (P 0.935) · F1 0.945 over 5 seeds · 0.854 without rules · CERT 3 → 22 of 36 ·
-    ~1 alert/day · update ~2.6 s · 35 tests.</div>
+  <div class="callout ok"><b>Cheat sheet.</b> 209,802 events · 108 entities · 44 (+7 web) + 19 features · 13 activity signals · 3 layers · 33 rules ·
+    threshold 45 (stats max 43.8) · F1 0.951 (P 0.935) · F1 0.942 over 5 seeds · 0.854 without rules · CERT 3 → 22 of 36 ·
+    ~1 alert/day · update ~2.6 s · 38 tests.</div>
 </div>
 
 </body>

@@ -50,6 +50,21 @@ WEB_FEATURES = [
 # web signals that are not modelled: read by the threat rules and shown on the User activity page
 WEB_RULE_SIGNALS = ["block_bypass", "new_site_executables", "browsing_minutes", "new_subdomains",
                     "random_subdomains", "beaconing"]
+# what people do with USB sticks, admin rights, shared folders, printers and PowerShell. Like the web
+# signals above these are not modelled (the ML feature set stays the same whatever logs arrive): they
+# feed the threat rules and the User activity page
+ACTIVITY_SIGNALS = ["usb_devices", "new_usb_devices", "usb_copies", "admin_logons", "runas_events",
+                    "shares_used", "new_shares", "admin_share_access", "print_jobs", "pages_printed",
+                    "off_hours_prints", "ps_commands", "ps_suspicious"]
+ACTIVITY_ACTIONS = ("print", "powershell", "admin_logon", "runas")     # not file / system accesses
+SHARE_ROOT = r"^(\\\\[^\\]+\\[^\\]+|/shares/[^/]+)"                       # \\\\server\\share  or  /shares/name
+# PowerShell that is rarely innocent: encoded or hidden commands, download-and-run, credential dumping,
+# fake password prompts, switching the antivirus off, deleting backups
+PS_SUSPICIOUS = (r"-e(?:nc|ncodedcommand)?\s+[a-z0-9+/=]{20,}|frombase64string|downloadstring|downloadfile|"
+                 r"net\.webclient|\biex\b|invoke-expression|-w(?:indowstyle)?\s+hid|mimikatz|sekurlsa|lsass|"
+                 r"promptforcredential|"
+                 r"ntds\.dit|set-mppreference|add-mppreference|disablerealtimemonitoring|"
+                 r"vssadmin\s+delete\s+shadows|certutil.*-urlcache")
 DEVICE_FEATURES = [
     "logins_to_device", "failed_logins_to_device", "distinct_users_on_device", "new_users_on_device",
     "connections", "bytes_out_mb", "max_upload_mb", "new_domains", "new_domain_upload_mb",
@@ -171,7 +186,7 @@ def user_features(frames: dict, cfg: Config = CONFIG) -> pd.DataFrame:
     parts.append(it.groupby(["user", "date"]).size().rename("impossible_travel").reset_index())
 
     # ---- access ----
-    x = acc.copy()
+    x = acc[~acc["action"].isin(ACTIVITY_ACTIONS)].copy()
     x["sensitive"] = x["sensitivity"].isin(["confidential", "restricted"]).astype(int)
     x["restricted"] = (x["sensitivity"] == "restricted").astype(int)
     x["pe"] = (x["action"] == "priv_escalation").astype(int)
@@ -188,6 +203,7 @@ def user_features(frames: dict, cfg: Config = CONFIG) -> pd.DataFrame:
         account_changes=("acct", "sum"), log_tamper=("tamper", "sum"), removable_media=("usb", "sum"))))
     parts.append(count_new(x, "user", "resource", "new_resources"))
     parts.append(count_new(x[x["sensitive"] == 1], "user", "resource", "new_sensitive_resources"))
+    parts += _activity_parts(acc, cfg)
 
     # ---- network ----
     parts += _network_parts(net, "user")
@@ -200,7 +216,7 @@ def user_features(frames: dict, cfg: Config = CONFIG) -> pd.DataFrame:
                                       cpu_high_hours=("high", "sum"), mem_mean=("mem_pct", "mean"),
                                       disk_io_mb=("disk_io_mb", "sum"), active_hours=("cpu_pct", "size"))))
 
-    out = _merge(parts, "user", USER_FEATURES + WEB_FEATURES + WEB_RULE_SIGNALS)
+    out = _merge(parts, "user", USER_FEATURES + WEB_FEATURES + WEB_RULE_SIGNALS + ACTIVITY_SIGNALS)
     # rule-only signal (kept out of USER_FEATURES so the ML models and baselines are unchanged):
     # successful logins from a source that failed against several different accounts within the
     # hour - a password spray that worked (one attacker spread thin over many accounts is
@@ -212,6 +228,49 @@ def user_features(frames: dict, cfg: Config = CONFIG) -> pd.DataFrame:
     out["is_admin"] = out["user"].isin(admins)
     out.insert(0, "entity_type", "user")
     return out.rename(columns={"user": "entity"})
+
+
+def share_root(resource: pd.Series) -> pd.Series:
+    """The shared folder a path lives in (lower-case), NaN for anything that is not on a share."""
+    return resource.astype(str).str.extract(SHARE_ROOT, expand=False).str.lower()
+
+
+def _activity_parts(acc: pd.DataFrame, cfg: Config) -> list:
+    """USB sticks, admin rights, shared folders, printing and PowerShell, per user-day.
+
+    * ``usb_devices`` / ``new_usb_devices`` - different sticks plugged in, and ones never seen for this user
+    * ``admin_logons`` / ``runas_events``   - logons carrying admin privileges, commands run as someone else
+    * ``shares_used`` / ``new_shares``      - shared folders worked in; ``admin_share_access`` counts the hidden
+                                              C$ / ADMIN$ shares that only administrators and attackers use
+    * ``pages_printed`` / ``off_hours_prints`` - print volume, and jobs at hours this person is never active
+    * ``ps_commands`` / ``ps_suspicious``   - PowerShell commands, and the ones matching ``PS_SUSPICIOUS``
+    """
+    if acc.empty:
+        return []
+    x = acc.copy()
+    act, res = x["action"], x["resource"].astype(str)
+    off = (hour_rarity(x, "user", min_history=50) < cfg.off_hours_prob).to_numpy()
+    x["usb_dev"] = np.where(act == "usb_connect", res, None)
+    x["usb_copy"] = (act == "copy_to_usb").astype(int)
+    x["admin_logon"] = (act == "admin_logon").astype(int)
+    x["runas"] = (act == "runas").astype(int)
+    x["share"] = share_root(res).where(~act.isin(ACTIVITY_ACTIONS + ("usb_connect",)))
+    x["admin_share"] = x["share"].str.endswith("$", na=False).astype(int)
+    printed = (act == "print").to_numpy()
+    x["print"] = printed.astype(int)
+    x["pages_p"] = np.where(printed, pd.to_numeric(x.get("pages", 0), errors="coerce").fillna(0), 0)
+    x["off_print"] = (printed & off).astype(int)
+    ps = (act == "powershell").to_numpy()
+    x["ps"] = ps.astype(int)
+    x["ps_susp"] = (ps & res.str.contains(PS_SUSPICIOUS, case=False, regex=True).to_numpy()).astype(int)
+    parts = [_agg(x, "user", dict(
+        usb_devices=("usb_dev", "nunique"), usb_copies=("usb_copy", "sum"), admin_logons=("admin_logon", "sum"),
+        runas_events=("runas", "sum"), shares_used=("share", "nunique"), admin_share_access=("admin_share", "sum"),
+        print_jobs=("print", "sum"), pages_printed=("pages_p", "sum"), off_hours_prints=("off_print", "sum"),
+        ps_commands=("ps", "sum"), ps_suspicious=("ps_susp", "sum")))]
+    parts.append(count_new(x[x["usb_dev"].notna()], "user", "usb_dev", "new_usb_devices"))
+    parts.append(count_new(x[x["share"].notna()], "user", "share", "new_shares"))
+    return parts
 
 
 SPRAY_MIN_ACCOUNTS = 5

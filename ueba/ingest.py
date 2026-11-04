@@ -20,7 +20,7 @@ from . import web
 REQUIRED = {
     "auth": ["timestamp", "user", "src_device", "src_ip", "dest_host", "auth_type", "result",
              "city", "country", "lat", "lon"],
-    "access": ["timestamp", "user", "device", "resource", "action", "sensitivity", "status"],
+    "access": ["timestamp", "user", "device", "resource", "action", "sensitivity", "status", "pages", "printer"],
     "network": ["timestamp", "user", "device", "src_ip", "dst_ip", "dst_port", "protocol",
                 "bytes_out", "bytes_in", "domain"],
     "resource": ["timestamp", "device", "user", "cpu_pct", "mem_pct", "disk_io_mb", "process_count"],
@@ -59,6 +59,9 @@ def normalise(name: str, df: pd.DataFrame) -> pd.DataFrame:
         df["result"] = df["result"].astype(str).str.lower()
         df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
         df["lon"] = pd.to_numeric(df["lon"], errors="coerce")
+    if name == "access":
+        df["pages"] = pd.to_numeric(df["pages"], errors="coerce").fillna(0).astype("int64")
+        df["printer"] = df["printer"].fillna("").astype(str)
     if name == "network":
         for c in ("bytes_out", "bytes_in", "dst_port"):
             df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype("int64")
@@ -68,6 +71,30 @@ def normalise(name: str, df: pd.DataFrame) -> pd.DataFrame:
             df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
     df["date"] = df["timestamp"].dt.date.astype(str)
     return df.sort_values("timestamp").reset_index(drop=True)
+
+
+def resolve_device_users(frames: dict) -> None:
+    """USB and PowerShell script-block events are logged by the computer, not the person; the parsers
+    leave them as ``?computer`` when the file itself does not say who was on it. Settle them here from
+    the asset inventory (the device's owner), then from who normally logs into that computer.
+    Whatever is still unknown is dropped: it cannot be tied to anyone's behaviour."""
+    acc = frames["access"]
+    unknown = acc["user"].str.startswith("?")
+    if not unknown.any():
+        return
+    owners: dict = {}
+    a = frames["auth"]
+    ok = a[(a["result"] == "success") & ~a["user"].str.startswith("?")]
+    for col in ("src_device", "dest_host"):                  # the usual user of each computer
+        top = ok.groupby(ok[col].str.lower())["user"].agg(lambda s: s.value_counts().index[0])
+        owners = {**top.to_dict(), **owners}
+    if "devices" in frames and "owner" in frames["devices"]:
+        d = frames["devices"]
+        named = d[d["owner"].fillna("").astype(str).str.strip().str.lower().isin(["", "system", "nan"]) == False]  # noqa: E712
+        owners.update(dict(zip(named["device"].astype(str).str.lower(), named["owner"].astype(str).str.lower())))
+    who = acc.loc[unknown, "user"].str[1:].str.lower().map(owners)
+    acc.loc[unknown, "user"] = who
+    frames["access"] = acc[acc["user"].notna()].reset_index(drop=True)
 
 
 def available_streams(folder: Path) -> list[str]:
@@ -90,6 +117,7 @@ def load_logs(folder: Path) -> dict:
         p = _find(folder, name)
         if p is not None:
             frames[name] = _read(p)
+    resolve_device_users(frames)
     if "users" not in frames:  # derive a minimal user directory
         users = sorted(set(frames["auth"]["user"]) | set(frames["access"]["user"]))
         frames["users"] = pd.DataFrame({"user": users, "full_name": users, "department": "unknown",

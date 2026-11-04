@@ -17,3 +17,8 @@ data/raw/
 *.tmp
 data/cert_eval/
 docs/data/*.zip
+data/llm.json
+data/llm_cache.db
+presentation/node_modules/
+presentation/package-lock.json
+presentation/render/

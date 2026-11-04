@@ -22,9 +22,10 @@
 |---|---|
 | CSV / JSON / JSON-lines tables, any column names | log type and columns matched by name **and by content** (a column of URLs is the website, a column of IPs is an address) |
 | One file mixing logins, file access, web traffic... | split by its event-type column; you can change what each value means; logoff events are skipped |
-| Linux `auth.log`, `secure`, syslog text | sshd logins (accepted / failed), `sudo` / `su` (privilege use), `useradd` (account creation) |
+| Linux `auth.log`, `secure`, syslog text | sshd logins (accepted / failed), `sudo` / `su` (privilege use), `useradd` (account creation), kernel "USB Mass Storage device detected" lines (USB sticks) |
 | Web proxy: Squid `access.log`, web-gateway CSV (URL, category, action) | every page and subdomain, site category, allowed / blocked, downloaded files, estimated minutes per website; blocked attempts, filter bypass through a proxy / VPN site, tool downloads, random-subdomain tunnelling and clockwork beaconing are detected |
-| Windows Event Viewer CSV export, PowerShell `Export-Csv`, raw `.evtx` | logons 4624/4625, process starts 4688, file access 4663, account / group changes 4720/4728/4732, log cleared 1102 |
+| Windows Event Viewer CSV export, PowerShell `Export-Csv`, raw `.evtx` | logons 4624/4625, process starts 4688, file access 4663, account / group changes 4720/4728/4732, log cleared 1102, admin logons 4672 and run-as 4648, shared folders 5140/5145, USB devices 6416; from the other Windows logs: print jobs (PrintService 307), USB (DriverFrameworks 2003), PowerShell commands (4103 / 4104 / 800, and 4688 when command-line auditing is on) |
+| Print server job list (PaperCut-style CSV: user, document, pages, printer) | every row becomes a print job; pages per person per day are compared with their usual volume |
 | Only one kind of log | fine - the other features stay at zero |
 | No staff list / asset list | fine - everyone is one peer group; privilege use is judged against each account's own history |
 

@@ -54,13 +54,17 @@ SCHEMA: dict[str, dict[str, tuple[bool, object, list[str]]]] = {
         "user": (True, None, ["username", "account", "accountname", "subjectusername", "userprincipalname",
                               "email", "uid", "actor"]),
         "resource": (True, None, ["file", "filename", "filepath", "path", "object", "objectname", "target",
-                                  "command", "commandline", "item", "document"]),
+                                  "command", "commandline", "item", "document", "documentname", "docname",
+                                  "jobname", "scriptblocktext", "devicename", "sharename"]),
         "action": (True, None, ["operation", "activity", "accesstype", "accessmask", "eventtype", "verb",
                                 "event", "accesses"]),
         "device": (False, "unknown", ["host", "hostname", "computer", "computername", "pc", "workstation",
                                       "machine"]),
         "sensitivity": (False, "internal", ["classification", "label", "sensitivitylabel", "datalabel"]),
         "status": (False, "success", ["result", "outcome"]),
+        # print logs (optional): how many pages, on which printer
+        "pages": (False, 0, ["pagecount", "totalpages", "pagesprinted", "numpages", "printedpages"]),
+        "printer": (False, "", ["printername", "queue", "printqueue", "queuename"]),
     },
     "network": {
         "timestamp": (True, None, ["time", "datetime", "eventtime", "ts", "@timestamp", "_time", "logtime",
@@ -138,7 +142,8 @@ STREAM_LABELS = {
 LOG_STREAMS = ("auth", "access", "network", "resource")
 FILENAME_HINTS = {
     "auth": ("auth", "logon", "login", "signin", "sign-in", "vpn", "4624", "4625", "sso"),
-    "access": ("access", "file", "audit", "object", "command", "sudo", "share"),
+    "access": ("access", "file", "audit", "object", "command", "sudo", "share", "print", "papercut", "usb",
+               "powershell"),
     "network": ("net", "proxy", "firewall", "dns", "conn", "flow", "zeek", "http", "web"),
     "resource": ("resource", "cpu", "perf", "metric", "telemetry", "usage"),
     "users": ("user", "employee", "staff", "people", "directory", "hr"),
@@ -331,16 +336,23 @@ def _result(s: pd.Series) -> pd.Series:
     return np.where(v.str.contains(FAIL_PAT, regex=True), "failure", "success")
 
 
+# actions the format parsers already name exactly (admin logon, run-as, print job, PowerShell command ...)
+CANONICAL_ACTIONS = ("admin_logon", "runas", "print", "powershell", "usb_connect", "copy_to_usb", "priv_escalation",
+                     "read", "write", "delete", "execute")
+
+
 def _action(s: pd.Series) -> pd.Series:
     v = s.astype(str).str.strip().str.lower()
-    rules = [(r"priv|elevat|sudo|runas|4672|4673|setuid|admin", "priv_escalation"),
+    rules = [(r"print", "print"),
+             (r"powershell|scriptblock|4103|4104", "powershell"),
+             (r"priv|elevat|sudo|runas|4672|4673|setuid|admin", "priv_escalation"),
              (r"usb|removable|thumb", "usb_connect"),
              (r"delet|remov|unlink|erase|rm$|\bdel\b|4660", "delete"),
              (r"writ|modif|edit|save|put|upload|creat|chang|4663", "write"),
              (r"read|open|view|get|download|list|access|4656", "read"),
              (r"exec|run|launch|start|4688", "execute")]
     out = v.copy()
-    done = pd.Series(False, index=v.index)
+    done = v.isin(CANONICAL_ACTIONS)
     for pat, name in rules:
         hit = v.str.contains(pat, regex=True) & ~done
         out[hit] = name
@@ -391,6 +403,9 @@ def convert(stream: str, raw: pd.DataFrame, mapping: dict[str, str | None]) -> C
     missing = [f for f, (req, _, _) in fields.items() if req and not mapping.get(f)]
     if stream == "network" and "domain" in missing and (mapping.get("url") or mapping.get("dst_ip")):
         missing.remove("domain")          # fall back to the URL's site, or the destination IP
+    print_log = stream == "access" and "action" in missing and bool(mapping.get("pages") or mapping.get("printer"))
+    if print_log:
+        missing.remove("action")          # a print server's job list: every row is a print job
     if missing:
         conv.errors.append("Map the required field(s): " + ", ".join(missing))
         return conv
@@ -398,6 +413,8 @@ def convert(stream: str, raw: pd.DataFrame, mapping: dict[str, str | None]) -> C
     for f, (_, default, _) in fields.items():
         src = mapping.get(f)
         df[f] = raw[src] if src else default
+    if print_log:
+        df["action"] = "print"
     if stream == "network" and not mapping.get("domain"):
         df["domain"] = df["url"] if mapping.get("url") else df["dst_ip"]
 
@@ -427,6 +444,8 @@ def convert(stream: str, raw: pd.DataFrame, mapping: dict[str, str | None]) -> C
         df["sensitivity"] = _sensitivity(df["sensitivity"])
         df["status"] = pd.Series(_result(df["status"]), index=df.index)
         df["resource"] = df["resource"].astype(str)
+        df["pages"] = pd.to_numeric(df["pages"], errors="coerce").fillna(0).clip(lower=0).astype("int64")
+        df["printer"] = df["printer"].fillna("").astype(str).replace({"nan": ""})
     if stream == "network":
         for c in ("bytes_out", "bytes_in", "dst_port"):
             df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).clip(lower=0).astype("int64")

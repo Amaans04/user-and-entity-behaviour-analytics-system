@@ -157,6 +157,15 @@ class User:
     ports: list
 
 
+PRINT_RATE = {"Finance": 1.2, "HR": 1.0, "Management": 0.9, "Sales": 0.5}      # print jobs a day, by department
+ADMIN_PRIVILEGES = "Special privileges: SeSecurityPrivilege SeBackupPrivilege SeRestorePrivilege SeDebugPrivilege"
+PS_ROUTINE = ["Get-Service -Name Spooler", "Get-ChildItem C:\\Deploy", "Get-EventLog -LogName System -Newest 50",
+              "Restart-Service w3svc", "Test-NetConnection fs01 -Port 445", "Import-Module ActiveDirectory",
+              "Get-ADUser -Filter * -SearchBase 'OU=Staff,DC=corp,DC=local'", "Get-Process | Sort-Object CPU -Descending",
+              "dotnet build .\\api.sln", "Get-Content .\\deploy.log -Tail 100", "Get-Disk | Get-Partition",
+              "Invoke-Command -ComputerName app-srv01 -ScriptBlock { Get-Service }"]
+
+
 @dataclass
 class Streams:
     auth: list = field(default_factory=list)
@@ -172,6 +181,8 @@ class LogGenerator:
         self.rng = np.random.default_rng(cfg.seed)
         # web-page detail has its own random stream, so adding it leaves every other log line unchanged
         self.web_rng = np.random.default_rng(cfg.seed + 1009)
+        # ... and so do printing, USB sticks, admin logons and PowerShell
+        self.act_rng = np.random.default_rng(cfg.seed + 2003)
         self.start = datetime.fromisoformat(cfg.start_date)
         self.s = Streams()
         self.scale = n_users_scale
@@ -271,8 +282,38 @@ class LogGenerator:
         self.s.auth.append((ts, u.username, src_device or u.device, src_ip, dest, auth_type,
                             result, city, cc, lat, lon))
 
-    def access(self, ts, u, resource, sens, action, success="success", device=None):
-        self.s.access.append((ts, u.username, device or u.device, resource, action, sens, success))
+    def access(self, ts, u, resource, sens, action, success="success", device=None, pages=0, printer=""):
+        self.s.access.append((ts, u.username, device or u.device, resource, action, sens, success, pages, printer))
+
+    def print_job(self, ts, u, path, sens, pages):
+        self.access(ts, u, path.rsplit("/", 1)[-1], sens, "print", pages=int(pages),
+                    printer=f"PRN-{DEPT_CODE[u.dept]}-01")
+
+    def office_activity(self, u: User, base: datetime, start: float, end: float):
+        """The rest of an ordinary day: a few print jobs, the odd USB stick, and for IT staff admin logons
+        and PowerShell. Habits are fixed per person; uses its own random stream (see ``act_rng``)."""
+        a = self.act_rng
+        habit = zlib.crc32(u.username.encode())
+        when = lambda: base + timedelta(hours=float(a.uniform(start, max(start + 0.1, end))))  # noqa: E731
+        for _ in range(a.poisson(PRINT_RATE.get(u.dept, 0.2) * (0.5 + habit % 100 / 100))):
+            path, sens = u.files[int(a.integers(len(u.files)))]
+            self.print_job(when(), u, path, sens, a.integers(1, 13))
+        if habit % 8 == 0 and a.random() < 0.2:              # one person in eight carries a personal stick
+            ts = when()
+            self.access(ts, u, f"USB storage: SanDisk Ultra [{habit:08X}]", "internal", "usb_connect")
+            for i in range(int(a.integers(0, 3))):
+                path, sens = u.files[int(a.integers(len(u.files)))]
+                self.access(ts + timedelta(minutes=1 + i), u, path, sens, "copy_to_usb")
+        if u.is_admin:
+            for _ in range(a.poisson(3)):
+                self.access(when(), u, ADMIN_PRIVILEGES, "restricted", "admin_logon",
+                            device=u.servers[int(a.integers(len(u.servers)))])
+            if a.random() < 0.3:
+                self.access(when(), u, f"run as svc_deploy on {u.servers[int(a.integers(len(u.servers)))]}",
+                            "restricted", "runas")
+        if u.dept in ("IT-Admin", "Engineering"):
+            for _ in range(a.poisson(5 if u.is_admin else 1.2)):
+                self.access(when(), u, PS_ROUTINE[int(a.integers(len(PS_ROUTINE)))], "internal", "powershell")
 
     def page(self, domain: str, download: bool = False) -> str:
         """A plausible page URL on ``domain`` (optionally a file download)."""
@@ -380,6 +421,7 @@ class LogGenerator:
             self.net(self.rand_time(base, start, end), u, "office365.com", 443,
                      self.rng.uniform(20e6, 80e6), 50_000)
         self.web_noise(u, base, start, end)
+        self.office_activity(u, base, start, end)
 
         # --- resource usage (hourly on the laptop) ---
         h = start
@@ -463,6 +505,8 @@ class LogGenerator:
         for i in range(60):
             p, s = targets[i % len(targets)]
             self.access(base + timedelta(minutes=2, seconds=i * 50), u, p, s, "read")
+        for i in range(3):
+            self.print_job(base + timedelta(minutes=15 + i), u, "salaries_2026.xlsx", "restricted", 45)
         self.net(base + timedelta(minutes=55), u, "wetransfer.com", 443, 350e6, 40_000)
         self.truth(inc, "off_hours_access", u.username, "user", d, "T1078 Valid Accounts",
                    "Login at 02:20 and 60 confidential/restricted files read incl. payroll")
@@ -497,6 +541,15 @@ class LogGenerator:
                 self.access(base + timedelta(seconds=i * 30), u, p, s, "read")
             for dom in ["naukri.com", "linkedin.com/jobs", "indeed.com"]:
                 self.net(base + timedelta(minutes=5), u, dom, 443, 30_000, 900_000)
+            # the same files also leave on a personal USB stick and on paper, a little more each day
+            self.access(base + timedelta(minutes=20), u, "USB storage: Kingston DataTraveler [E0D55EA574F1]",
+                        "internal", "usb_connect")
+            for i in range(8 + 4 * k):
+                p, s = files[(i * 7 + k) % len(files)]
+                self.access(base + timedelta(minutes=21, seconds=i * 10), u, p, s, "copy_to_usb")
+            for i in range(3):
+                p, s = files[(i * 7 + k) % len(files)]
+                self.print_job(base + timedelta(minutes=30 + i), u, p, s, 20 + 15 * k)
             chunks = 3
             for c in range(chunks):
                 self.net(base + timedelta(minutes=45 + c * 10), u, "dropbox.com", 443,
@@ -518,6 +571,14 @@ class LogGenerator:
             self.access(base + timedelta(minutes=10 + i, seconds=30), u, p, s, "read")
         self.access(base + timedelta(minutes=20), u, "net group 'Domain Admins' /add", "restricted",
                     "priv_escalation")
+        self.access(base + timedelta(minutes=4), u, ADMIN_PRIVILEGES, "restricted", "admin_logon", device="dc01")
+        self.access(base + timedelta(minutes=6), u, "run as administrator on dc01", "restricted", "runas")
+        self.access(base + timedelta(minutes=7), u, "powershell.exe -nop -w hidden -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBi"
+                    "AGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkA", "internal", "powershell", device="dc01")
+        self.access(base + timedelta(minutes=8), u, "Invoke-Mimikatz -Command 'sekurlsa::logonpasswords'",
+                    "internal", "powershell", device="dc01")
+        self.access(base + timedelta(minutes=9), u, "\\\\dc01\\C$\\Windows\\NTDS\\ntds.dit", "restricted", "read",
+                    device="dc01")
         self.truth(inc, "privilege_escalation", u.username, "user", d, "T1068 Exploitation for Privilege Escalation",
                    "Sales user RDPs to domain controller and runs privileged commands on restricted data")
 
@@ -533,6 +594,11 @@ class LogGenerator:
             self.auth(base + timedelta(minutes=i * 4, seconds=30), u, h, atype, "success")
             self.net(base + timedelta(minutes=i * 4, seconds=40), u, h, 3389 if atype == "rdp" else 22,
                      200_000, 800_000, internal=True)
+            self.access(base + timedelta(minutes=i * 4, seconds=50), u, f"\\\\{h}\\ADMIN$\\svc_update.exe", "restricted",
+                        "write", device=h)
+            self.access(base + timedelta(minutes=i * 4, seconds=55), u,
+                        f"Invoke-Command -ComputerName {h} -ScriptBlock {{ whoami; net localgroup administrators }}",
+                        "internal", "powershell")
         self.net(base + timedelta(minutes=5), u, "internal-scan", 445, 5_000, 5_000, internal=True)
         self.truth(inc, "lateral_movement", u.username, "user", d, "T1021 Remote Services",
                    "SSH/RDP into 12 never-before-seen hosts inside 50 minutes")
@@ -563,6 +629,10 @@ class LogGenerator:
         for i in range(4):
             self.access(base + timedelta(minutes=10 + i), u, f"New-ADUser svc_backup{i}", "restricted",
                         "priv_escalation", device="UNKNOWN")
+        self.access(base + timedelta(minutes=8), u, "Set-MpPreference -DisableRealtimeMonitoring $true", "internal",
+                    "powershell", device="UNKNOWN")
+        self.access(base + timedelta(minutes=9), u, "vssadmin delete shadows /all /quiet", "internal", "powershell",
+                    device="UNKNOWN")
         self.access(base + timedelta(minutes=16), u, "wevtutil cl Security", "restricted", "delete",
                     device="UNKNOWN")
         self.truth(inc, "admin_account_abuse", u.username, "user", d, "T1136 Create Account / T1070 Indicator Removal",
@@ -693,7 +763,7 @@ class LogGenerator:
             "auth": pd.DataFrame(s.auth, columns=["timestamp", "user", "src_device", "src_ip", "dest_host",
                                                   "auth_type", "result", "city", "country", "lat", "lon"]),
             "access": pd.DataFrame(s.access, columns=["timestamp", "user", "device", "resource", "action",
-                                                      "sensitivity", "status"]),
+                                                      "sensitivity", "status", "pages", "printer"]),
             "network": pd.DataFrame(s.network, columns=["timestamp", "user", "device", "src_ip", "dst_ip",
                                                         "dst_port", "protocol", "bytes_out", "bytes_in",
                                                         "domain", "url", "category", "web_action"]),

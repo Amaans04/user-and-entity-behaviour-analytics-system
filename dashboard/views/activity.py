@@ -1,4 +1,5 @@
-"""User activity - what one person actually did on a day: pages, downloads, blocked attempts, files, logins.
+"""User activity - what one person actually did on a day: pages, downloads, blocked attempts, files, logins,
+USB sticks, admin rights, shared folders, printing and PowerShell.
 
 The behaviour models say *how unusual* a day was; this page shows *what happened*, with every action that
 is out of character for that person flagged (a site they never used, a blocked request, a hacking or
@@ -11,10 +12,15 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from dashboard.ui import BLUE, ORANGE, Q, ctx, show, style, table_exists
+from dashboard.ui import BLUE, ORANGE, Q, ai_panel, ctx, show, style, table_exists
 from ueba import web
+from ueba.features import ACCOUNT_CMDS, ACTIVITY_ACTIONS, LOG_TAMPER, PS_SUSPICIOUS, share_root
 
 LARGE_UPLOAD_MB = 50
+LARGE_PRINT_PAGES = 50
+SENSITIVE = ["confidential", "restricted"]
+USB_ACTIONS = ["usb_connect", "copy_to_usb"]
+ADMIN_ACTIONS = ["priv_escalation", "admin_logon", "runas"]
 
 
 def _usual(feats: pd.DataFrame, col: str) -> float:
@@ -27,9 +33,9 @@ def _metric(c, label: str, today: float, usual: float, fmt: str = "{:,.0f}"):
              help="Today's value and this person's median day during the learning period")
 
 
-def _net_select(cols: list[str]) -> str:
-    """Only the network columns this workspace's database has (analyses before web detail lack url etc.)."""
-    have = set(Q("PRAGMA table_info(network)")["name"])
+def _net_select(cols: list[str], table: str = "network") -> str:
+    """Only the columns this workspace's database has (analyses before web or print detail lack some)."""
+    have = set(Q(f"PRAGMA table_info({table})")["name"])
     return ", ".join(c for c in cols if c in have)
 
 
@@ -54,8 +60,9 @@ def _flags(df: pd.DataFrame, cond_labels: list[tuple[pd.Series, object]]) -> pd.
 def page_activity():
     scores, alerts, meta = ctx.scores, ctx.alerts, ctx.meta
     st.title("User activity")
-    st.caption("What a person actually did - pages visited, downloads, blocked attempts, files and logins - with "
-               "everything out of character for them flagged. Only metadata is shown, never page or file content.")
+    st.caption("What a person actually did - pages visited, downloads, blocked attempts, files, logins, USB sticks, "
+               "admin rights, shared folders, printing and PowerShell - with everything out of character for them "
+               "flagged. Only metadata is shown, never page or file content.")
     users = sorted(scores.loc[scores.entity_type == "user", "entity"].unique())
     if not users:
         st.info("No user activity in this workspace yet.")
@@ -90,9 +97,17 @@ def page_activity():
     prev = web.add_sites(prev.assign(url=prev["url"].fillna("") if "url" in prev else "")) if len(prev) else prev
     seen_sites = set(prev["site"]) if len(prev) else set()
     seen_hosts = set(prev["host"]) if len(prev) else set()
-    acc = _text(Q("SELECT timestamp, device, resource, action, sensitivity, status FROM access WHERE user=? "
-                  "AND date=? ORDER BY timestamp", (user, day)))
-    seen_files = set(Q("SELECT DISTINCT resource FROM access WHERE user=? AND date<?", (user, day))["resource"])
+    acc_cols = _net_select(["timestamp", "device", "resource", "action", "sensitivity", "status", "pages", "printer"],
+                           "access")
+    acc = _text(Q(f"SELECT {acc_cols} FROM access WHERE user=? AND date=? ORDER BY timestamp", (user, day)))
+    for c, empty in (("pages", 0), ("printer", "")):
+        if c not in acc:
+            acc[c] = empty
+    acc["pages"] = pd.to_numeric(acc["pages"], errors="coerce").fillna(0).astype(int)
+    past = Q("SELECT DISTINCT resource, action FROM access WHERE user=? AND date<?", (user, day))
+    seen_files = set(past["resource"])
+    seen_shares = set(share_root(past["resource"]).dropna())
+    used_before = set(past["action"])                    # kinds of action this person has a history of
     au = Q("SELECT timestamp, auth_type, src_device, dest_host, src_ip, city, country, result FROM auth "
            "WHERE user=? AND date=? ORDER BY timestamp", (user, day)) if table_exists("auth") else pd.DataFrame()
     au = _text(au)
@@ -110,6 +125,13 @@ def page_activity():
     _metric(m[1], "Files opened", tv("access_events"), _usual(base, "access_events"))
     _metric(m[2], "Sensitive files", tv("sensitive_access"), _usual(base, "sensitive_access"))
     _metric(m[3], "MB uploaded", tv("bytes_out_mb"), _usual(base, "bytes_out_mb"), "{:,.1f}")
+    m = st.columns(5)
+    _metric(m[0], "USB events", tv("removable_media"), _usual(base, "removable_media"))
+    _metric(m[1], "Admin actions", tv("priv_esc") + tv("admin_logons") + tv("runas_events"),
+            _usual(base, "priv_esc") + _usual(base, "admin_logons") + _usual(base, "runas_events"))
+    _metric(m[2], "Shared folders", tv("shares_used"), _usual(base, "shares_used"))
+    _metric(m[3], "Pages printed", tv("pages_printed"), _usual(base, "pages_printed"))
+    _metric(m[4], "PowerShell commands", tv("ps_commands"), _usual(base, "ps_commands"))
 
     # ---------------------------------------------------------------- flagged tables
     if len(net):
@@ -120,17 +142,31 @@ def page_activity():
         net["flag"] = _net_flags(net, seen_sites, seen_hosts)
     if len(acc):
         acc["time"] = pd.to_datetime(acc["timestamp"]).dt.strftime("%H:%M:%S")
+        act = acc["action"]
+        is_file = ~act.isin(list(ACTIVITY_ACTIONS) + ["usb_connect"])
         new = ~acc["resource"].isin(seen_files) & ~acc.duplicated("resource")
+        acc["share"] = share_root(acc["resource"]).where(is_file).fillna("")
+        new_share = (acc["share"] != "") & ~acc["share"].isin(seen_shares) & ~acc.duplicated("share")
+        sensitive = acc["sensitivity"].isin(SENSITIVE)
         acc["flag"] = _flags(acc, [
-            (new & acc["sensitivity"].isin(["confidential", "restricted"]), "first time, " + acc["sensitivity"]),
-            (new & ~acc["sensitivity"].isin(["confidential", "restricted"]), "first time"),
-            (acc["action"].isin(["priv_escalation", "copy_to_usb", "usb_connect"]),
-             acc["action"].replace({"priv_escalation": "privilege use", "copy_to_usb": "USB copy",
-                                    "usb_connect": "USB device"}))])
+            (new & is_file & sensitive, "first time, " + acc["sensitivity"]),
+            (new & is_file & ~sensitive, "first time"),
+            (new & (act == "usb_connect"), "new USB device"),
+            (act.isin(["priv_escalation", "copy_to_usb", "usb_connect", "admin_logon", "runas"]),
+             act.replace({"priv_escalation": "privilege use", "copy_to_usb": "USB copy", "usb_connect": "USB device",
+                          "admin_logon": "admin logon", "runas": "run as another account"})),
+            (act.isin(ADMIN_ACTIONS) & ~act.isin(used_before), "never done before"),
+            (new_share, "new shared folder"),
+            (acc["share"].str.endswith("$"), "admin share"),
+            ((act == "print") & sensitive, acc["sensitivity"] + " document printed"),
+            ((act == "print") & (acc["pages"] >= LARGE_PRINT_PAGES), "large print job"),
+            ((act == "powershell") & acc["resource"].str.contains(PS_SUSPICIOUS, case=False, regex=True),
+             "suspicious PowerShell")])
     if len(au):
         au["time"] = pd.to_datetime(au["timestamp"]).dt.strftime("%H:%M:%S")
 
-    tabs = st.tabs(["Story", "Websites", "Web browsing", "Downloads", "Blocked attempts", "Files", "Logins"])
+    tabs = st.tabs(["Story", "Websites", "Web browsing", "Downloads", "Blocked attempts", "Files", "Logins", "USB",
+                    "Admin rights", "Shared folders", "Printing", "PowerShell"])
     with tabs[0]:
         _story(net, acc, au)
     with tabs[1]:
@@ -166,10 +202,11 @@ def page_activity():
             st.dataframe(bl[["time", "domain", "page", "category"]].rename(columns={"domain": "site"}),
                          hide_index=True)
     with tabs[4]:
-        if not len(acc):
+        files = acc[~acc["action"].isin(list(ACTIVITY_ACTIONS) + ["usb_connect"])] if len(acc) else acc
+        if not len(files):
             st.info("No file or system access recorded for this day.")
         else:
-            st.dataframe(acc[["time", "resource", "action", "sensitivity", "status", "device", "flag"]]
+            st.dataframe(files[["time", "resource", "action", "sensitivity", "status", "device", "flag"]]
                          .rename(columns={"resource": "file / command"}), hide_index=True, height=420)
     with tabs[5]:
         if not len(au):
@@ -178,6 +215,130 @@ def page_activity():
             st.dataframe(au[["time", "auth_type", "src_device", "dest_host", "src_ip", "city", "country", "result"]]
                          .rename(columns={"auth_type": "type", "src_device": "from device", "dest_host": "into"}),
                          hide_index=True)
+    with tabs[6]:
+        _usb(acc, base)
+    with tabs[7]:
+        _admin(acc, base)
+    with tabs[8]:
+        _shares(acc, base)
+    with tabs[9]:
+        _printing(acc, base)
+    with tabs[10]:
+        _powershell(acc, base)
+
+
+def _explain_commands(rows: pd.DataFrame, kind: str, key: str):
+    """Pick one logged command (flagged ones first) and have the local AI model explain it."""
+    from ueba import llm
+    if not len(rows):
+        return
+    r = rows.assign(_f=rows["flag"] != "").sort_values(["_f", "time"], ascending=[False, True])
+    r = r.drop_duplicates("resource").head(40)
+    st.markdown("**Explain a command with AI**")
+    labels = {i: f"{'[flagged] ' if f else ''}{t}  {c[:90]}" for i, t, c, f in
+              zip(r.index, r["time"], r["resource"], r["_f"])}
+    pick = st.selectbox("Command", list(labels), format_func=labels.get, key=f"cmd_pick_{key}",
+                        label_visibility="collapsed")
+    row = r.loc[pick]
+    ai_panel(llm.command_prompt(row["resource"], kind, host=row.get("device", ""), user=row.get("user", "")),
+             "command", f"cmd_{key}_{pick}", button="Explain this command")
+
+
+def _rows(acc: pd.DataFrame, actions: list[str]) -> pd.DataFrame:
+    return acc[acc["action"].isin(actions)] if len(acc) else acc
+
+
+def _usb(acc: pd.DataFrame, base: pd.DataFrame):
+    """USB sticks plugged in and the files copied to them."""
+    u = _rows(acc, USB_ACTIONS)
+    if not len(u):
+        st.info("No USB storage was used on this day.")
+        return
+    plugged, copied = u[u["action"] == "usb_connect"], u[u["action"] == "copy_to_usb"]
+    st.markdown(f"**{plugged['resource'].nunique()} USB device(s) connected, {len(copied)} file(s) copied to USB** - "
+                f"usually {_usual(base, 'removable_media'):.0f} USB event(s) a day.")
+    u = u.assign(what=u["action"].map({"usb_connect": "Connected", "copy_to_usb": "Copied to USB"}))
+    st.dataframe(u[["time", "what", "resource", "sensitivity", "device", "flag"]]
+                 .rename(columns={"resource": "USB device / file", "device": "on computer"}), hide_index=True)
+    st.caption("Windows logs a new device (Security 6416, DriverFrameworks 2003) under the computer, not the person; "
+               "it is shown for whoever was logged on to that computer.")
+
+
+def _admin(acc: pd.DataFrame, base: pd.DataFrame):
+    """Everything done with elevated rights: admin logons, run-as, sudo, account changes, log clearing."""
+    if not len(acc):
+        st.info("No privileged activity recorded for this day.")
+        return
+    acct = acc["resource"].str.contains(ACCOUNT_CMDS, regex=True)
+    tamper = acc["resource"].str.contains(LOG_TAMPER, regex=True)
+    a = acc[acc["action"].isin(ADMIN_ACTIONS) | acct | tamper]
+    if not len(a):
+        st.info("No privileged activity recorded for this day.")
+        return
+    kind = a["action"].map({"priv_escalation": "Elevated (sudo / run as admin)", "admin_logon": "Logon with admin "
+                            "privileges", "runas": "Ran as another account"}).fillna("Command")
+    kind = kind.where(~acct.loc[a.index], "Account or group change").where(~tamper.loc[a.index], "Cleared a log")
+    usual = _usual(base, "priv_esc") + _usual(base, "admin_logons") + _usual(base, "runas_events")
+    st.markdown(f"**{len(a)} privileged action(s) on {a['device'].nunique()} computer(s)** - usually {usual:.0f} a day.")
+    st.dataframe(a.assign(kind=kind)[["time", "kind", "resource", "device", "flag"]]
+                 .rename(columns={"resource": "detail", "device": "on computer"}), hide_index=True, height=380,
+                 column_config={"detail": st.column_config.TextColumn(width="medium"),
+                                "flag": st.column_config.TextColumn(width="large")})
+    cmds = a[a["action"].isin(["priv_escalation", "runas"]) | acct.loc[a.index] | tamper.loc[a.index]]
+    _explain_commands(cmds, "privileged shell (sudo / run as)", "admin")
+
+
+def _shares(acc: pd.DataFrame, base: pd.DataFrame):
+    """One row per shared folder: how much was read, changed and deleted there."""
+    s = acc[acc["share"] != ""] if len(acc) else acc
+    if not len(s):
+        st.info("No shared folders were used on this day.")
+        return
+    g = s.groupby("share")
+    tab = pd.DataFrame({
+        "files": g["resource"].nunique(), "read": g["action"].apply(lambda x: int((x == "read").sum())),
+        "changed": g["action"].apply(lambda x: int((x == "write").sum())),
+        "deleted": g["action"].apply(lambda x: int((x == "delete").sum())),
+        "sensitive": g["sensitivity"].apply(lambda x: int(x.isin(SENSITIVE).sum())),
+        "first": g["time"].min(), "last": g["time"].max(),
+        "flag": g["flag"].apply(lambda x: ", ".join(sorted({f for v in x for f in v.split(", ")
+                                                            if f in ("new shared folder", "admin share")})))})
+    tab = tab.reset_index().rename(columns={"share": "shared folder"}).sort_values("files", ascending=False)
+    st.markdown(f"**{len(tab)} shared folder(s), {s['resource'].nunique()} file(s)** - usually "
+                f"{_usual(base, 'shares_used'):.0f} folder(s) a day.")
+    st.dataframe(tab.style.apply(lambda r: ["background-color: rgba(235,104,52,.12)" if r["flag"] else ""] * len(r),
+                                 axis=1), hide_index=True)
+    st.caption("Admin shares (C$, ADMIN$) are the hidden shares administrators - and attackers moving between "
+               "machines - use to reach a whole disk.")
+
+
+def _printing(acc: pd.DataFrame, base: pd.DataFrame):
+    p = _rows(acc, ["print"])
+    if not len(p):
+        st.info("Nothing was printed on this day.")
+        return
+    st.markdown(f"**{len(p)} print job(s), {int(p['pages'].sum())} page(s)** - usually "
+                f"{_usual(base, 'pages_printed'):.0f} page(s) a day.")
+    st.dataframe(p[["time", "resource", "pages", "printer", "sensitivity", "device", "flag"]]
+                 .rename(columns={"resource": "document", "device": "sent from"}), hide_index=True)
+
+
+def _powershell(acc: pd.DataFrame, base: pd.DataFrame):
+    p = _rows(acc, ["powershell"])
+    if not len(p):
+        st.info("No PowerShell commands recorded for this day.")
+        return
+    bad = int((p["flag"].str.contains("suspicious PowerShell")).sum())
+    st.markdown(f"**{len(p)} PowerShell command(s), {bad} suspicious** - usually "
+                f"{_usual(base, 'ps_commands'):.0f} command(s) a day.")
+    only = st.toggle("Only suspicious", value=False, key="ps_only_flagged")
+    v = p[p["flag"] != ""] if only else p
+    st.dataframe(v[["time", "resource", "device", "flag"]].rename(columns={"resource": "command", "device": "on computer"})
+                 .style.apply(lambda r: ["background-color: rgba(235,104,52,.12)" if r["flag"] else ""] * len(r), axis=1),
+                 hide_index=True, height=380, column_config={"command": st.column_config.TextColumn(width="large")})
+    st.caption("Suspicious means encoded or hidden commands, download-and-run, credential dumping, fake password prompts, switching the "
+               "antivirus off or deleting backups.")
+    _explain_commands(p, "PowerShell", "ps")
 
 
 def _net_flags(net: pd.DataFrame, seen_sites: set, seen_hosts: set) -> pd.Series:
@@ -212,8 +373,12 @@ def _story(net: pd.DataFrame, acc: pd.DataFrame, au: pd.DataFrame):
     if len(acc):
         verb = acc["action"].map({"read": "Opened", "write": "Edited", "delete": "Deleted", "execute": "Ran",
                                   "priv_escalation": "Elevated", "copy_to_usb": "Copied to USB",
-                                  "usb_connect": "Connected USB"}).fillna(acc["action"])
-        parts.append(pd.DataFrame({"time": acc["time"], "what": verb, "detail": acc["resource"], "flag": acc["flag"]}))
+                                  "usb_connect": "Connected USB", "print": "Printed", "powershell": "PowerShell",
+                                  "admin_logon": "Admin logon", "runas": "Ran as"}).fillna(acc["action"])
+        detail = acc["resource"].where(acc["action"] != "print", acc["resource"] + " (" + acc["pages"].astype(str)
+                                       + " pages on " + acc["printer"] + ")")
+        detail = detail.where(acc["action"] != "admin_logon", "on " + acc["device"])
+        parts.append(pd.DataFrame({"time": acc["time"], "what": verb, "detail": detail, "flag": acc["flag"]}))
     if not parts:
         st.info("No activity recorded for this day.")
         return
@@ -234,7 +399,8 @@ def _story(net: pd.DataFrame, acc: pd.DataFrame, au: pd.DataFrame):
     out = pd.DataFrame(rows)
     st.caption(f"{len(out)} steps" + (" (flagged only)" if only else "") + ". Flags mark what is out of character "
                "for this person: a site or file never used before, a blocked request, a risky site, an executable "
-               "download, a sensitive file or a large upload.")
+               "download, a sensitive file, a large upload, a new USB stick or shared folder, admin rights, a large "
+               "or sensitive print job, suspicious PowerShell.")
     st.dataframe(out.style.apply(lambda r: ["background-color: rgba(235,104,52,.12)" if r["flag"] else ""] * len(r),
                                  axis=1), hide_index=True, height=480, width="stretch")
 

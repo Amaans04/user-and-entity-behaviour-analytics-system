@@ -35,6 +35,18 @@ If the panel hands you their own logs, follow `docs/PANEL_DATA_PLAYBOOK.md`.
 
 ## 3. Likely questions and answers
 
+**Why do you call it AI-based? Is there a model behind it?**
+Two kinds of AI. Detection is machine learning: an unsupervised ensemble (Isolation Forest, Local Outlier
+Factor and a neural-network autoencoder) learns each user's normal behaviour and flags deviations, so
+nobody has to write the rules. On top of that, a local language model (Qwen 2.5 7B through Ollama)
+explains the findings in plain English: case summaries, next steps and what a suspicious command does.
+
+**Why doesn't the language model decide what is an alert?**
+It can make things up and can't be measured the way a detector can. The ML models and rules decide
+and are evaluated (precision, recall, F1). The language model only explains, using just the facts the
+detectors produced, and its text is labelled AI-generated. It runs locally, so no log data leaves the
+machine. Log text is fenced off in the prompt so an attacker can't plant instructions in a log.
+
 **Why unsupervised and not a classifier?**
 Real organisations have almost no labelled attacks, and the next attack is not like the last one.
 The models learn only what *normal* looks like for each person, so they need no attack labels and can
@@ -43,7 +55,7 @@ flag new techniques. Labels are used only to measure performance.
 **Your results are on data you generated yourself - isn't that circular?**
 Yes, that is the main limitation, which is why: (1) the attacks are realistic MITRE ATT&CK techniques
 mixed with benign oddities that look suspicious; (2) results hold over five differently generated
-companies (mean F1 0.945); (3) the ablation shows the behavioural layers alone reach F1 0.854 without
+companies (mean F1 0.942); (3) the ablation shows the behavioural layers alone reach F1 0.854 without
 any rules; and (4) the system was run on CERT r4.2, a benchmark built by CMU that I had no part in.
 
 **Rules alone score F1 0.98 - so why the ML?**
@@ -104,6 +116,22 @@ Two detections. Hundreds of random-looking subdomains of one site in a day (x8k2
 is smuggled out in host names - DNS / HTTP tunnelling - or how malware finds its server (R22, T1071.004). A
 never-used site contacted at clockwork intervals all day is software calling home, not a person (R23, T1071.001).
 Both fire on the practice pack's malware and on the simulated cryptominer, and never on normal days.
+
+**What do USB, admin rights, shared folders, printing and PowerShell add, and where do they come from?**
+All five are read from logs, nothing is installed on the PCs. USB sticks: Security 6416 / DriverFrameworks 2003
+(Linux: kernel lines). Admin rights: 4672 (logon with admin privileges), 4648 (run as another account), sudo.
+Shared folders: 5140 / 5145. Printing: PrintService 307 or the print server's job list. PowerShell: 4103 / 4104 /
+800, or 4688 with command-line auditing. The User activity page has a tab for each, against the person's usual
+day. Five rules use them, each judged against the account's own history: admin rights never used before (R24),
+hidden admin shares C$ / ADMIN$ (R25, T1021.002), four or more new shared folders in a day (R26, T1135), print
+volume five times the usual (R27), and PowerShell that hides, downloads-and-runs, dumps credentials or switches
+protection off (R28, T1059.001). Like the web signals they are not fed to the ML models, so the model is the same
+whatever logs arrive.
+
+**Windows logs a USB stick under the computer, not the person. How do you know who it was?**
+6416, 2003 and PowerShell script blocks (4104) carry the machine account or only a SID. The event goes to whoever
+last logged on to that computer in the same file; failing that to the device's owner in the asset list, then to
+the account that normally logs into it. If none of those exists the event is dropped rather than guessed.
 
 **Why didn't precision go up when you added web activity?**
 Detection went from 11/11 to 12/12 and the ML ensemble alone improved from F1 0.79 to 0.86, but one more benign

@@ -32,19 +32,19 @@
     },
     "ML ensemble": {
       "roc_auc": 0.999,
-      "pr_auc": 0.918
+      "pr_auc": 0.945
     },
     "Isolation Forest": {
-      "roc_auc": 0.844,
-      "pr_auc": 0.517
+      "roc_auc": 0.878,
+      "pr_auc": 0.572
     },
     "Local Outlier Factor": {
       "roc_auc": 0.949,
-      "pr_auc": 0.84
+      "pr_auc": 0.853
     },
     "Autoencoder": {
       "roc_auc": 0.996,
-      "pr_auc": 0.609
+      "pr_auc": 0.625
     },
     "Threat rules": {
       "roc_auc": 0.983,
@@ -131,7 +131,7 @@
       "detected": true,
       "first_alert": "2026-08-16",
       "delay_days": 0,
-      "max_risk": 96.4,
+      "max_risk": 99.8,
       "top_severity": "critical",
       "caught_by": "ML ensemble, peer group, personal baseline, threat rules"
     },
@@ -144,8 +144,8 @@
       "detected": true,
       "first_alert": "2026-08-20",
       "delay_days": 0,
-      "max_risk": 76.3,
-      "top_severity": "high",
+      "max_risk": 95.6,
+      "top_severity": "critical",
       "caught_by": "ML ensemble, peer group, personal baseline, threat rules"
     },
     {
@@ -318,9 +318,9 @@
     {
       "threshold": 80,
       "precision": 1.0,
-      "recall": 0.933,
-      "f1": 0.966,
-      "alerts": 28
+      "recall": 0.967,
+      "f1": 0.983,
+      "alerts": 29
     }
   ]
 }

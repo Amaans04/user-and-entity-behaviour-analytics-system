@@ -4,8 +4,8 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from dashboard.ui import ctx, flash
-from ueba import auth, service
+from dashboard.ui import ai_status, ctx, flash
+from ueba import auth, llm, service
 from ueba import workspace as WS
 
 
@@ -15,7 +15,10 @@ def page_admin():
         st.warning("Administrators only.")
         return
     me = ctx.user["username"]
-    t_users, t_tokens, t_audit, t_service = st.tabs(["Users", "API tokens", "Audit log", "Service"])
+    t_users, t_tokens, t_audit, t_service, t_ai = st.tabs(["Users", "API tokens", "Audit log", "Service",
+                                                            "AI assistant"])
+    with t_ai:
+        _ai_settings(me)
 
     with t_users:
         st.caption("**viewer** - read only · **analyst** - + triage alerts · **admin** - + data sources, "
@@ -119,3 +122,29 @@ def page_admin():
         if hb and hb.get("last"):
             st.markdown("**Last activity per workspace**")
             st.dataframe(pd.DataFrame([dict(workspace=k, **v) for k, v in hb["last"].items()]), hide_index=True)
+
+
+def _ai_settings(me: str):
+    """Pick the local language model (Ollama) that writes case summaries and command explanations."""
+    st.caption("A language model running locally through Ollama writes plain-English case summaries and "
+               "explains logged commands. It never raises, scores or closes alerts - detection stays with the "
+               "baselines, the ML ensemble and the threat rules - and no log data leaves this machine.")
+    cur = llm.settings()
+    stat = ai_status()
+    models = llm.installed_models()
+    st.markdown(f"**Status:** {'ready - ' + stat['model'] if stat['ready'] else 'offline - ' + stat['reason']}  \n"
+                f"**Ollama address:** `{cur['url']}`")
+    if not models:
+        st.info("Ollama isn't reachable. Start it with `ollama serve`, then install a model, e.g. "
+                "`ollama pull qwen2.5:7b`.")
+    with st.form("ai_settings"):
+        on = st.toggle("Use the AI assistant", value=cur["enabled"])
+        options = models or [cur["model"]]
+        model = st.selectbox("Model", options, index=options.index(cur["model"]) if cur["model"] in options else 0,
+                             help="7-8B models are a good balance on a laptop; larger ones explain better but slower.")
+        if st.form_submit_button("Save", type="primary"):
+            llm.save_settings(on, model)
+            ai_status.clear()
+            auth.audit(me, "ai.settings", detail=f"enabled={on} model={model}")
+            flash("success", f"AI assistant {'on' if on else 'off'} - model {model}.")
+            st.rerun()

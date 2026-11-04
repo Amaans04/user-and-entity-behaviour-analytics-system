@@ -327,10 +327,11 @@ bullets([("Capture.", "Logs arrive by upload, drop folder, ingest API or agent a
          ("Features.", "Each user-day becomes 44 numbers and each device-day 19 (failed logins, unusual hours, MB to new "
                        "domains, USB use ...), computed only from earlier days, as a live system would. When web-proxy "
                        "logs are present, seven more describe what the user did online: pages, blocked attempts, risky "
-                       "sites, new kinds of site and downloads."),
+                       "sites, new kinds of site and downloads. Thirteen activity signals cover USB sticks, admin rights, "
+                       "shared folders, printing and PowerShell."),
          ("Profiles.", "Every entity has a personal and a department-peer baseline that adapt over time, but suspicious "
                        "days are never learned."),
-         ("Detection.", "Robust statistics, an unsupervised ensemble (Isolation Forest, LOF, autoencoder) and 28 "
+         ("Detection.", "Robust statistics, an unsupervised ensemble (Isolation Forest, LOF, autoencoder) and 33 "
                         "ATT&CK-mapped rules score every day independently."),
          ("Risk and response.", "Scores are fused into a 0-100 risk weighted by asset criticality and accumulated over "
                                 "days; alerts carry plain-English reasons, are grouped into cases and notified, and "
@@ -393,10 +394,10 @@ table("Table 6.2: Needs translated into features - and why each feature exists",
 par("h2", "6.3 Specification of the Product")
 table("Table 6.3: Main functional requirements", [
     ("ID", "Requirement"),
-    ("FR1", "Accept the four log streams as CSV, JSON, ZIP, Linux auth.log / syslog text, Windows event exports (CSV, .evtx) or web-proxy logs (Squid, gateway CSV); split mixed files; map columns by name and content; normalise values."),
+    ("FR1", "Accept the four log streams as CSV, JSON, ZIP, Linux auth.log / syslog text, Windows event exports (CSV, .evtx) or web-proxy logs (Squid, gateway CSV), including USB, admin-logon, shared-folder, print and PowerShell events; split mixed files; map columns by name and content; normalise values."),
     ("FR2", "Collect continuously from a drop folder, a token-authenticated HTTP API and an endpoint agent."),
-    ("FR3", "Compute 44 user (+7 web-activity) and 19 device features per day; learn personal and peer baselines over a rolling 45 days."),
-    ("FR4", "Score each day with statistics, the ML ensemble and 28 rules; fuse into a 0-100 risk with criticality and decay."),
+    ("FR3", "Compute 44 user (+7 web-activity) and 19 device features and 13 activity signals per day; learn personal and peer baselines over a rolling 45 days."),
+    ("FR4", "Score each day with statistics, the ML ensemble and 33 rules; fuse into a 0-100 risk with criticality and decay."),
     ("FR5", "After the learning period, score new data incrementally with saved models, identical to a full re-run."),
     ("FR6", "Raise explained alerts; group them into cases with status, assignee and notes; allow audited suppression."),
     ("FR7", "Notify analysts of new or escalated alerts by webhook or e-mail, without duplicates."),
@@ -432,6 +433,18 @@ par("p", "Each user-day is summarised into 44 features in four groups - authenti
          "downloads are early warning signs that byte counts miss. Why: daily "
          "aggregates are cheap, private and explainable, and novelty features are computed only from earlier days, so "
          "the system behaves the same in a test as in live use.")
+par("p", "Thirteen further signals describe five things a person does that leave their own trace in the logs: USB "
+         "storage (devices connected, devices never seen for this person, files copied), admin rights (logons carrying "
+         "administrator privileges, commands run as another account), shared folders (folders used, folders never "
+         "used before, accesses to the hidden C$ / ADMIN$ shares), printing (jobs, pages, jobs at hours the person is "
+         "never active) and PowerShell (commands, and commands that are encoded or hidden, download and run code, dump "
+         "credentials or switch protection off). They come from Windows events 6416 and 2003 (USB), 4672 and 4648 "
+         "(admin rights), 5140 and 5145 (shares), PrintService 307 or a print server's job list, and 4103, 4104, 800 "
+         "or 4688 command lines (PowerShell); on Linux, from sudo and the kernel's USB storage lines. Windows records "
+         "a USB device and a script block under the computer, not the person, so such an event is given to whoever "
+         "last logged on to that computer, then to the device's owner in the asset list, and is dropped if neither is "
+         "known. Like the web signals they are kept out of the models and feed the rules and the console. Why: the "
+         "model stays the same whichever logs an organisation can supply.")
 par("p", "For each entity and feature the profile stores centre = median and spread = max(1.4826 x MAD, (P95 - median) "
          "/ 1.645, floor); deviation is z = (today - centre) / spread. Why robust statistics: behaviour is spiky, and "
          "the P95 term stops a person's own occasional peaks from being flagged. The same profile is built for the "
@@ -443,7 +456,7 @@ bullets([("Statistics:", "the three largest positive deviations above z = 3, for
          ("ML ensemble:", "Isolation Forest [19], LOF [20] and an autoencoder [21] (scikit-learn [18]) trained on "
                           "normal days only and calibrated so that 1 = the 99th percentile of normal. Why three: they "
                           "fail differently; why unsupervised: real organisations have almost no labelled attacks."),
-         ("Rules:", "28 rules mapped to ATT&CK, e.g. brute force (T1110), impossible travel (T1078), privilege "
+         ("Rules:", "33 rules mapped to ATT&CK, e.g. brute force (T1110), impossible travel (T1078), privilege "
                     "escalation by a non-admin (T1068), upload to a new domain (T1048), mining pools (T1496), log "
                     "clearing (T1070), removable media used by an account with no such history (T1052.001, added "
                     "after the CERT evaluation, Section 10.3) and a successful login from an address that just failed "
@@ -454,7 +467,11 @@ bullets([("Statistics:", "the three largest positive deviations above z = 3, for
                     "downloaded from a site never used before (T1105) and first visits to hacking or anonymizer sites "
                     "(T1588.002); two more use subdomains and timing: hundreds of random-looking subdomains of one site "
                     "(DNS / HTTP tunnelling, T1071.004) and a new site contacted at clockwork intervals all day "
-                    "(malware beaconing, T1071.001)."),
+                    "(malware beaconing, T1071.001). Five use the activity signals, each judged against the account's "
+                    "own history: admin rights never used before (T1078.002), access to hidden admin shares "
+                    "(T1021.002), four or more shared folders opened for the first time in a day (T1135), print "
+                    "volume five times the person's usual and at least 100 pages, and suspicious PowerShell "
+                    "(T1059.001)."),
          ("Fusion:", "A = 1 - (1 - 0.28 stat)(1 - 0.10 peer)(1 - 0.30 ml)(1 - rules); daily risk = 100 x min(1, A x "
                      "criticality); entity risk(t) = entity risk(t-1) x 0.5^(days/3) + max(0, daily risk - 15). An "
                      "alert is raised at daily risk 45 (critical at 80, high at 60) or when accumulated risk reaches 60. "
@@ -466,7 +483,7 @@ par("p", "Each monitored environment is a workspace with its own logs, models, a
          "mapping by column name and content, such as TimeCreated to timestamp, with a preview), a drop folder, a "
          "token-authenticated ingest API or an endpoint agent that keeps data while the server is unreachable. Linux "
          "auth.log / syslog text and Windows Security events (Event Viewer CSV, PowerShell export, .evtx) are read "
-         "directly, and a file mixing several event types is split by its event-type column. Why four routes: real logs come from "
+         "directly, as are the PrintService, DriverFrameworks and PowerShell logs exported the same way, and a file mixing several event types is split by its event-type column. Why four routes: real logs come from "
          "exports, scripts, shippers and machines, and all of them end in the same import step.")
 par("p", "The engine trains the baselines and ML models once and saves them with a fingerprint of the settings; later "
          "analyses reuse them and score only the days from the earliest changed day onwards. Because every feature "
@@ -478,7 +495,9 @@ par("h3", "6.4.4 Analyst workflow and security")
 bullets([("Cases:", "alerts on one entity within 7 days form a case with status, assignee and a notes timeline; "
                     "closing it records a verdict for every day. Why: an analyst should handle a person once, not 30 times."),
          ("User activity:", "for any user and day the console lists the websites visited with their subdomains and "
-                            "minutes spent, the pages, downloads, blocked attempts, files and logins as one story, folds routine repeats and flags each step that is new or "
+                            "minutes spent, the pages, downloads, blocked attempts, files and logins as one story, with a tab "
+                            "each for USB sticks, admin rights, shared folders, print jobs and PowerShell commands against "
+                            "the person's usual day; it folds routine repeats and flags each step that is new or "
                             "risky for that person (a new site, a block, a hacking or proxy site, an executable, a "
                             "first-time sensitive file, a large upload). Why: a score says how unusual a day was; the "
                             "analyst also needs to see what happened."),
@@ -513,11 +532,11 @@ table("Table 7.1: Software", [
     ("Streamlit, Plotly", "1.50+, 5.18+", "Analyst console and charts"),
     ("SQLite", "bundled", "Logs, scores, alerts, cases, users, audit"),
     ("Python standard library", "bundled", "Ingest API, password hashing, notifications, locking"),
-    ("psutil, Matplotlib, pytest", "5.9+, 3.7+, 7.4+", "Agent telemetry, report figures, 35 tests"),
+    ("psutil, Matplotlib, pytest", "5.9+, 3.7+, 7.4+", "Agent telemetry, report figures, 38 tests"),
 ], widths=[2.0, 2.0, 2.6])
 par("h2", "7.3 Datasets")
-bullets([("Simulated organisation (primary):", "48 employees and 12 servers over 60 days, 205,483 events, 11 planted "
-                                               "attacks (28 attack entity-days) and 4 harmless but unusual events. Why: "
+bullets([("Simulated organisation (primary):", "48 employees and 12 servers over 60 days, 209,802 events, 12 planted "
+                                               "attacks (30 attack entity-days) and 4 harmless but unusual events. Why: "
                                                "real logs are confidential and never labelled."),
          ("CMU CERT r4.2 [14]:", "1,000 simulated employees over 17 months with 70 insiders in three scenarios; the full "
                                  "16 GB data set was converted into 12.8 million events. Why: an independent benchmark the "
@@ -581,7 +600,7 @@ bullets([("Main run, robustness and ablation:", "seed 42; five differently gener
                         "development half only; a 7-day trend layer evaluated the same way."),
          ("Operation:", "incremental update compared with a full re-run; the organisation replayed through the ingest "
                         "API as a live feed."),
-         ("Tests:", "35 automated tests of detection, ingestion, the incremental engine, the API, security, cases and "
+         ("Tests:", "38 automated tests of detection, ingestion, the incremental engine, the API, security, cases and "
                     "notifications.")])
 
 # ================================================================= 10. RESULTS
@@ -593,16 +612,19 @@ table("Table 10.1: Detection results (detection window, seed 42)", [
     ("Precision / recall / F1-score", "0.935 / 0.967 / 0.951 (TP 29, FP 2, FN 1)"),
     ("False positive rate / alerts per day", "0.09% / about 1.0 for 108 entities"),
     ("Fused ROC-AUC / PR-AUC", "1.000 / 0.998"),
-    ("Five organisations (mean)", "precision 0.923, recall 0.967, F1 0.945; 60 of 60 incidents"),
+    ("Five organisations (mean)", "precision 0.918, recall 0.967, F1 0.942; 60 of 60 incidents"),
     ("Behavioural layers only (no rules)", "F1 0.854, PR-AUC 0.953"),
-    ("Rules only / ML only / statistics only", "F1 0.983 / 0.856 / 0.468"),
+    ("Rules only / ML only / statistics only", "F1 0.983 / 0.863 / 0.468"),
 ], widths=[2.6, 4.0])
 par("p", "The two false positives were planted oddities - the new project (risk 49) and the 20 GB backup server (49) - "
          "and the only false negative the pivot laptop of the lateral movement (43.6, just below the threshold). The "
          "ablation needs careful reading: rules look best only because they were written for these attack types; "
          "without any rule the behavioural layers still reach F1 0.854 with no prior knowledge of the attacks. "
          "Profiling web activity raised the ML ensemble on its own from F1 0.789 to 0.856, at the cost of one more "
-         "borderline false alarm. Statistics alone flag nearly everything unusual (precision 0.31), which is why the "
+         "borderline false alarm. The five activity rules fired on nine user-days, all of them attack days: the "
+         "privilege escalation (admin rights, an admin share, a sweep of shares and two suspicious PowerShell commands), "
+         "the lateral movement (twelve admin shares), the administrator abuse and the print volume of the slow "
+         "insider and the off-hours access. Statistics alone flag nearly everything unusual (precision 0.31), which is why the "
          "threshold requires corroboration.")
 figure("reports/figures/roc_curves.png", "Figure 10.1: ROC curves of each detection layer (simulated organisation)", 4.4)
 par("h2", "10.2 Continuous Operation")
@@ -610,7 +632,7 @@ par("p", "Cutting the logs at a day boundary and in the middle of a day, then up
          "explanations and alerts identical to a full re-run. Replaying the organisation as a live feed through the "
          "collector's import path (30 days of history, then 30 live days in 8-hour slices) took one full training and 89 "
          "incremental updates of 1.8-5.7 seconds (median 2.6), with no rejected file or error, and reproduced the batch "
-         "result exactly: 12 of 12 incidents and F1 0.951. A full analysis of the organisation takes about 5 "
+         "result exactly: 12 of 12 incidents and F1 0.951. A full analysis of the organisation takes about 7 "
          "seconds; CERT, with 12.8 million events, about 8 minutes.")
 par("h2", "10.3 CERT r4.2 Benchmark")
 table("Table 10.2: CERT r4.2, held-out half of the users (36 labelled accounts)", [
@@ -631,8 +653,8 @@ par("p", "Out of the box the system generalised poorly: 3 of 36 held-out insider
          "statistical and ML layers rank CERT days barely better than chance (ROC-AUC about 0.54). The answer key "
          "labels 72 accounts: the 70 insiders and two supervisors whose accounts scenario-3 insiders misused.")
 par("p", "One generic insider indicator was then added: removable-media use by an account that never used removable "
-         "media in its learning period (R16, T1052.001, weight 0.45 like comparable rules). It never fires on the "
-         "simulated organisation and was chosen on the development half (4 to 17 of 36). On the untouched test half it "
+         "media in its learning period (R16, T1052.001, weight 0.45 like comparable rules). On the "
+         "simulated organisation it fires only on the slow insider's own USB days and was chosen on the development half (4 to 17 of 36). On the untouched test half it "
          "raised detection to 22 of 36 - every scenario-1 insider - at 0.84 alerts a day, and an analyst reviewing the "
          "three riskiest users each day (0.3%) would see 28 of 36. Job seekers who steal data gradually (scenario 2) "
          "remain largely undetected because they already used USB drives and only used them more.")
@@ -652,6 +674,8 @@ figure("report/screens/05_activity.png", "Figure 10.5: User activity - the web-f
        "story: seven blocks, a proxy site, two hacking-tool downloads, first-time files and 1.2 GB uploaded", 6.3)
 figure("report/screens/06_websites.png", "Figure 10.6: Websites tab - each site with its subdomains and estimated "
        "minutes, against the person's usual minutes per site", 6.3)
+figure("report/screens/08_printing.png", "Figure 10.7: Printing tab - the slow insider on day five: 25 USB events and "
+       "248 pages printed against a usual 8, with the large and confidential jobs flagged", 6.3)
 par("h2", "10.5 Discussion")
 par("p", "On the simulated organisation the system meets its objectives: every attack on its first day, about one alert "
          "a day, and a reason for each. CERT shows that this should be read as an upper bound - the organisation was "
@@ -667,12 +691,13 @@ par("h2", "11.1 Conclusion")
 par("p", "The project delivers a Python UEBA system that meets the problem statement and runs as a product. It captures "
          "four log streams from uploads, a drop folder, an authenticated API and an endpoint agent; profiles users and "
          "devices against adaptive, poisoning-resistant personal and peer baselines; detects deviations with robust "
-         "statistics, an unsupervised ensemble and 28 ATT&CK rules; and turns the evidence into explained, risk-ranked "
+         "statistics, an unsupervised ensemble and 33 ATT&CK rules; and turns the evidence into explained, risk-ranked "
          "alerts grouped into cases, notified to analysts and handled in a secured console, where the analyst can see "
-         "exactly what a person browsed, downloaded, was blocked from and opened. Incremental scoring is identical to a "
+         "exactly what a person browsed, downloaded, was blocked from, opened, printed, copied to a USB stick and ran "
+         "with admin rights. Incremental scoring is identical to a "
          "full re-run.")
 par("p", "On the simulated organisation it detected all 12 attacks on their first day with precision 0.935, recall "
-         "0.967 and F1 0.951 (mean F1 0.945 over five organisations), and the behavioural layers alone reached 0.854. On the "
+         "0.967 and F1 0.951 (mean F1 0.942 over five organisations), and the behavioural layers alone reached 0.854. On the "
          "independent CERT r4.2 benchmark the out-of-the-box system found only 3 of 36 held-out insiders; with one "
          "generic indicator it found 22 of 36 at under one alert a day, while gradual job-seeker theft remained largely "
          "undetected - an honest result that defines the next step.")
@@ -703,15 +728,15 @@ for text in [
     "flags deviations. This project builds a Python UEBA system and takes it from analytics to an operable product.",
     "Four kinds of logs (authentication, system access, network and web-proxy, resource usage) are turned into 44 daily "
     "features per user (seven more for web activity when proxy logs are present) and 19 per device and compared with adaptive personal and department baselines that never learn suspicious "
-    "days. Robust statistics, an unsupervised ensemble (Isolation Forest, Local Outlier Factor, autoencoder) and 28 "
+    "days. Robust statistics, an unsupervised ensemble (Isolation Forest, Local Outlier Factor, autoencoder) and 33 "
     "MITRE ATT&CK rules are fused into a 0-100 risk score that requires agreement between layers, and every alert "
     "explains itself. Around this core, logs arrive by upload, drop folder, an authenticated API or an endpoint agent; "
     "a collector service scores new data incrementally - provably identical to a full re-run - and notifies analysts; "
-    "alerts are grouped into cases; analysts see what each person actually did - pages, downloads, blocked attempts and "
-    "files - with the out-of-character steps flagged; and the console is protected by roles, hashed passwords, scoped tokens and an "
+    "alerts are grouped into cases; analysts see what each person actually did - pages, downloads, blocked attempts, "
+    "files, USB sticks, admin rights, shared folders, print jobs and PowerShell commands - with the out-of-character steps flagged; and the console is protected by roles, hashed passwords, scoped tokens and an "
     "audit trail.",
     "On a simulated 48-person organisation with 12 planted attacks, all were detected on their first day with "
-    "precision 0.935, recall 0.967 and F1 0.951 (mean F1 0.945 over five organisations), and a live replay "
+    "precision 0.935, recall 0.967 and F1 0.951 (mean F1 0.942 over five organisations), and a live replay "
     "reproduced this exactly. On the independent CERT r4.2 benchmark the out-of-the-box system found only 3 of 36 "
     "held-out insiders because its behavioural layers ignore small deviations; one generic indicator raised this to 22 "
     "of 36 at under one alert a day, while gradual data theft by job seekers remained largely undetected.",
@@ -746,7 +771,7 @@ for k, v in abbr.items():
 # ---------------------------------------------------------------- source code appendix: keep the first three excerpts
 sc = find("SOURCE CODE", "Heading 1")
 set_runs(Paragraph(sc._p.getnext(), sc._parent),
-         "The complete source code - about 7,000 lines of Python in 23 modules, the analyst console and 35 automated "
+         "The complete source code - about 8,000 lines of Python in 23 modules, the analyst console and 38 automated "
          "tests - is in the project folder and its Git repository. Three key parts of the detection logic are "
          "reproduced below.")
 code_heads = []

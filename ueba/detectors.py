@@ -55,6 +55,12 @@ LABELS = {
     "downloads": "file downloads", "executable_downloads": "executable / script downloads",
     "browsing_minutes": "minutes online", "new_subdomains": "never-visited subdomains",
     "random_subdomains": "random-looking subdomains of one site", "beaconing": "sites contacted at clockwork intervals",
+    "usb_devices": "USB storage devices connected", "new_usb_devices": "never-seen USB storage devices",
+    "usb_copies": "files copied to USB", "admin_logons": "logons with admin privileges",
+    "runas_events": "commands run as another account", "shares_used": "shared folders used",
+    "new_shares": "never-used shared folders", "admin_share_access": "accesses to admin shares (C$, ADMIN$)",
+    "print_jobs": "print jobs", "pages_printed": "pages printed", "off_hours_prints": "print jobs at unusual hours",
+    "ps_commands": "PowerShell commands", "ps_suspicious": "suspicious PowerShell commands",
 }
 
 
@@ -236,6 +242,34 @@ RULES = [
          lambda d: d.get("beaconing", pd.Series(0, index=d.index)) > 0,
          lambda r: f"{r.beaconing:.0f} site(s) never used before, contacted at clockwork intervals all day - software "
                    "calling home, not a person browsing"),
+    # ---- USB, admin rights, shared folders, printing, PowerShell ----
+    Rule("R24", "Admin privileges used without history", 0.45, "T1078.002 Valid Accounts: Domain Accounts", "user",
+         lambda d: ((d.get("admin_logons", pd.Series(0, index=d.index))
+                     + d.get("runas_events", pd.Series(0, index=d.index)) > 0)
+                    & (d.get("baseline_privileged", pd.Series(1, index=d.index)) == 0) & (~d["is_admin"].astype(bool))),
+         lambda r: f"{r.admin_logons:.0f} logon(s) with admin privileges and {r.runas_events:.0f} command(s) run as "
+                   "another account - neither seen for this person in the learning period"),
+    Rule("R25", "Admin share access without history", 0.55, "T1021.002 SMB / Windows Admin Shares", "user",
+         lambda d: ((d.get("admin_share_access", pd.Series(0, index=d.index)) > 0)
+                    & (d.get("baseline_admin_share", pd.Series(1, index=d.index)) == 0)),
+         lambda r: f"{r.admin_share_access:.0f} accesses to hidden admin shares (C$, ADMIN$) by an account that never "
+                   "used them in its learning period"),
+    Rule("R26", "Sweep of shared folders", 0.40, "T1135 Network Share Discovery", "user",
+         lambda d: d.get("new_shares", pd.Series(0, index=d.index)) >= 4,
+         lambda r: f"{r.new_shares:.0f} shared folders opened for the first time in one day"),
+    Rule("R27", "Unusual print volume", 0.30, "Insider-risk indicator (data leaving on paper)", "user",
+         lambda d: ((d.get("pages_printed", pd.Series(0, index=d.index)) >= 100)
+                    & (d.get("pages_printed", pd.Series(0, index=d.index))
+                       >= 5 * (d.get("baseline_pages", pd.Series(0, index=d.index)) + 1))),
+         lambda r: f"{r.pages_printed:.0f} pages printed in {r.print_jobs:.0f} job(s) - usually "
+                   f"{r.get('baseline_pages', 0):.0f} a day"
+                   + (f"; {r.off_hours_prints:.0f} job(s) at hours this person is never active"
+                      if r.get("off_hours_prints", 0) > 0 else "")),
+    Rule("R28", "Suspicious PowerShell", 0.60, "T1059.001 Command and Scripting Interpreter: PowerShell", "user",
+         lambda d: ((d.get("ps_suspicious", pd.Series(0, index=d.index)) > 0)
+                    & (d.get("baseline_ps_suspicious", pd.Series(0, index=d.index)) == 0)),
+         lambda r: f"{r.ps_suspicious:.0f} PowerShell command(s) that hide, download-and-run, dump credentials or "
+                   "switch protection off"),
     # ---- device rules ----
     Rule("D01", "Crypto-mining host", 0.80, "T1496 Resource Hijacking", "device",
          lambda d: d["mining_conns"] > 0,

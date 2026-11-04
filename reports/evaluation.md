@@ -23,10 +23,10 @@ Confusion matrix: TP=29, FP=2, FN=1, TN=2331
 | Fused risk score | 1.000 | 0.998 |
 | Personal baseline (z-score) | 0.997 | 0.933 |
 | Peer-group baseline | 0.983 | 0.959 |
-| ML ensemble | 0.999 | 0.918 |
-| Isolation Forest | 0.844 | 0.517 |
-| Local Outlier Factor | 0.949 | 0.840 |
-| Autoencoder | 0.996 | 0.609 |
+| ML ensemble | 0.999 | 0.945 |
+| Isolation Forest | 0.878 | 0.572 |
+| Local Outlier Factor | 0.949 | 0.853 |
+| Autoencoder | 0.996 | 0.625 |
 | Threat rules | 0.983 | 0.967 |
 
 ## Incident-level results
@@ -38,8 +38,8 @@ Confusion matrix: TP=29, FP=2, FN=1, TN=2331
 | INC-03 | off_hours_access | yes | 2026-08-08 | 0 | 100 | ML ensemble, peer group, personal baseline, threat rules |
 | INC-04 | data_exfiltration | yes | 2026-08-11 | 0 | 91 | ML ensemble, peer group, personal baseline, threat rules |
 | INC-05 | insider_slow_exfiltration | yes | 2026-08-14 | 0 | 100 | ML ensemble, peer group, personal baseline, threat rules |
-| INC-06 | privilege_escalation | yes | 2026-08-16 | 0 | 96 | ML ensemble, peer group, personal baseline, threat rules |
-| INC-07 | lateral_movement | yes | 2026-08-20 | 0 | 76 | ML ensemble, peer group, personal baseline, threat rules |
+| INC-06 | privilege_escalation | yes | 2026-08-16 | 0 | 100 | ML ensemble, peer group, personal baseline, threat rules |
+| INC-07 | lateral_movement | yes | 2026-08-20 | 0 | 96 | ML ensemble, peer group, personal baseline, threat rules |
 | INC-08 | cryptomining | yes | 2026-08-22 | 0 | 97 | ML ensemble, peer group, personal baseline, threat rules |
 | INC-09 | brute_force | yes | 2026-08-25 | 0 | 92 | ML ensemble, peer group, personal baseline, threat rules |
 | INC-10 | impossible_travel | yes | 2026-08-27 | 0 | 100 | ML ensemble, peer group, personal baseline, threat rules |
@@ -67,4 +67,4 @@ Confusion matrix: TP=29, FP=2, FN=1, TN=2331
 | 65 | 1.0 | 0.967 | 0.983 | 29 |
 | 70 | 1.0 | 0.967 | 0.983 | 29 |
 | 75 | 1.0 | 0.967 | 0.983 | 29 |
-| 80 | 1.0 | 0.933 | 0.966 | 28 |
+| 80 | 1.0 | 0.967 | 0.983 | 29 |
