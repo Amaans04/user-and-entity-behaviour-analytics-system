@@ -1,7 +1,0 @@
-who,when,what
-hema,2026-06-10,ssh brute force then root
-manoj,2026-06-16,insider root + backdoor account
-vani,2026-06-20,"password spray, account taken over"
-yash,2026-06-23,account created + audit log cleared
-rhea,2026-06-17,"blocked from file-sharing, web proxy to bypass, hacking tools downloaded"
-kiran,2026-06-22,"malware beaconing every minute, data in random subdomains (C2 / tunnelling)"

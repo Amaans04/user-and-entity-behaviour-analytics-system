@@ -1,24 +1,16 @@
+# Python
 .venv/
 __pycache__/
 *.pyc
 .pytest_cache/
-data/ueba.db
-data/models.joblib
-data/live/
-data/cert_converted/
+
+# Generated at run time (rebuild with run_pipeline.py)
+data/*
+!data/.gitkeep
+
+# Research papers (copyrighted, download separately)
 papers/
-data/workspaces/
-data/console.db
-data/service.json
-data/cert/
+
+# OS / editor
 .DS_Store
-.playwright-mcp/
-data/raw/
 *.tmp
-data/cert_eval/
-docs/data/*.zip
-data/llm.json
-data/llm_cache.db
-presentation/node_modules/
-presentation/package-lock.json
-presentation/render/
